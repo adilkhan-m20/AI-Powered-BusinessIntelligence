@@ -10,6 +10,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_core.tools import tool
 import requests
 from langchain_community.vectorstores import FAISS
+from langchain_core.messages import AIMessage
 
 load_dotenv()
 
@@ -54,7 +55,9 @@ class AgentState(TypedDict):
 def should_continue(state: AgentState):
     """Check if the last message contains tool calls."""
     result = state['messages'][-1]
-    return hasattr(result, 'tool_calls') and len(result.tool_calls) > 0
+    def should_continue(state: AgentState):
+        result = state['messages'][-1]
+        return isinstance(result, AIMessage) and hasattr(result, 'tool_calls') and bool(result.tool_calls)
 
 
 system_prompt = """
@@ -80,7 +83,16 @@ def call_llm(state: AgentState) -> AgentState:
 def take_action(state: AgentState) -> AgentState:
     """Execute tool calls from the LLM's response."""
 
-    tool_calls = state['messages'][-1].tool_calls
+    last_message = state['messages'][-1]
+
+    if not isinstance(last_message, AIMessage):
+        raise TypeError("Expected AIMessage as the last message.")
+
+    tool_calls = getattr(last_message, "tool_calls", [])
+
+    if not tool_calls:
+        raise ValueError("No tool calls found in the last AIMessage.")
+    
     results = []
     for t in tool_calls:
         print(f"Calling Tool: {t['name']} with query: {t['args'].get('query', 'No query provided')}")
