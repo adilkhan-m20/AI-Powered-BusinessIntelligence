@@ -1,0 +1,13 @@
+
+python-dotenv
+requests
+mimetypes; python_version < "3.12"  # (builtin in 3.12+, so safe to skip if on 3.12)
+langchain>=0.2.0
+langchain-openai>=0.1.8
+langchain-community>=0.2.0
+langgraph>=0.0.25
+faiss-cpu
+openai
+unstructured
+unstructured[excel]
+pdfminer.six
