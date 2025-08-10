@@ -15,13 +15,14 @@ def getFileName(response):
     filename=None
     if "filename=" in content_disposition:
         filename = content_disposition.split("filename=")[-1].strip('"')
+    return filename
 
 def fetch_text_from_api(url):
     response = requests.get(url)
     if response.status_code == 200:
         content_type = response.headers.get("Content-Type", "").lower()
         filename = getFileName(requests.get(url))
-        if content_type.startswith("text/") and not filename.endswith(".txt"):
+        if content_type.startswith("text/") and filename and not filename.endswith(".txt"):
             return response.text
     return None
 
@@ -48,7 +49,7 @@ def upsert_documents(documents):
     print("Saved FAISS DB.")
 
 if response.status_code == 200:
-    content_type = response.headers.get("Content-Type","").lower
+    content_type = response.headers.get("Content-Type","").lower()
     filename = getFileName(requests.get(url))
     
     # if no file name guess based on content type
@@ -64,41 +65,39 @@ if response.status_code == 200:
         #plain text from api
         print("Text Data: ",response.text)
     elif filename.endswith(".txt") or "text/plain" in content_type:
-        text_stream = io.StringIO(response.text)
-        loader = TextLoader(text_stream)
-        #with open(filename,"w",encoding="utf-8") as f:
-            #f.write(response.text)
-        #print(f"Text file saves as {filename}")
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(response.text)
+        loader = TextLoader(filename)
+        docs = loader.load()
+        print("Loaded Text Documents:", docs)
+        
     elif filename.endswith(".pdf") or "application/pdf" in content_type:
-        pdf_stream = io.BytesIO(response.content)
-        loader = PyPDFLoader(pdf_stream)
-        #with open(filename, "wb") as f:
-            #f.write(response.content)
-        #print(f"PDF file saved as {filename}")
+        with open(filename, "wb") as f:
+            f.write(response.content)
+        loader = PyPDFLoader(filename)
 
     elif filename.endswith(".xlsx") or filename.endswith(".xls") or "application/vnd.ms-excel" in content_type or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in content_type:
-        excel_stream = io.BytesIO(response.content)
-        loader = UnstructuredExcelLoader(excel_stream)
-        #with open(filename, "wb") as f:
-            #f.write(response.content)
-        #print(f"Excel file saved as {filename}")
+        with open(filename, "wb") as f:
+            f.write(response.content)
+        loader = UnstructuredExcelLoader(filename)
     else:
         # Default case for other binary files
         with open(filename, "wb") as f:
             f.write(response.content)
         print(f"File saved as {filename} cannot process this file")
+        loader = None
 else:
     print("Error: ",response.status_code,response.text)
+    loader = None
 
-docs = loader.load()
+if loader:
+    docs = loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+    documents = text_splitter.split_documents(docs)
 
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size = 1000,
-    chunk_overlap = 200
-)
-documents = text_splitter.split_documents(docs)
-
-DB_PATH = "faiss_index"
-embeddings = OpenAIEmbeddings()
-
-upsert_documents(documents)
+    DB_PATH = "faiss_index"
+    embeddings = OpenAIEmbeddings()
+    upsert_documents(documents)
