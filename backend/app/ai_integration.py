@@ -10,7 +10,7 @@ import tempfile
 import shutil
 
 # Add ai-service to Python path
-AI_SERVICE_PATH = Path(__file__).parent.parent.parent / "ai-service"
+AI_SERVICE_PATH = Path(__file__).parent.parent / "ai-service"
 sys.path.append(str(AI_SERVICE_PATH))
 
 class AIServiceIntegration:
