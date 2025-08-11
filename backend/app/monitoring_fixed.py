@@ -1,5 +1,5 @@
 
-# app/monitoring.py - Advanced Monitoring & Analytics System
+# app/monitoring.py - Fixed Advanced Monitoring & Analytics System
 import asyncio
 import json
 import time
@@ -7,20 +7,24 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from collections import defaultdict, deque
 import psutil
-import redis.asyncio as redis_asyncio
-from redis.asyncio.client import Redis  # Correct Redis type for typing
+try:
+    import redis.asyncio as aioredis
+    REDIS_AVAILABLE = True
+except ImportError:
+    print("⚠️ Redis not available, running without Redis backend")
+    REDIS_AVAILABLE = False
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import get_db
-
 
 class MetricsCollector:
     """Comprehensive system monitoring and analytics"""
 
     def __init__(self, redis_url: str = "redis://localhost:6379"):
         self.redis_url = redis_url
-        self.redis: Optional[Redis] = None  # Use correct Redis type
+        self.redis: Optional[Any] = None
+        self.redis_available = REDIS_AVAILABLE
 
         # In-memory metrics (last 24 hours)
         self.request_metrics = deque(maxlen=86400)  # 1 per second
@@ -34,7 +38,17 @@ class MetricsCollector:
 
     async def initialize(self):
         """Initialize monitoring system"""
-        self.redis = redis_asyncio.from_url(self.redis_url, decode_responses=True)
+        if self.redis_available:
+            try:
+                self.redis = aioredis.from_url(self.redis_url, decode_responses=True)
+                # Test connection
+                await self.redis.ping()
+                print("✅ Redis connection established for monitoring")
+            except Exception as e:
+                print(f"⚠️ Redis connection failed: {e}. Running without Redis.")
+                self.redis = None
+        else:
+            print("⚠️ Redis not available, using in-memory storage only")
 
         # Start background collection tasks
         asyncio.create_task(self._collect_system_metrics())
@@ -43,7 +57,10 @@ class MetricsCollector:
     async def cleanup(self):
         """Cleanup monitoring resources"""
         if self.redis:
-            await self.redis.close()
+            try:
+                await self.redis.close()
+            except Exception as e:
+                print(f"Error closing Redis connection: {e}")
 
     def get_timestamp(self) -> float:
         """Get current timestamp"""
@@ -67,8 +84,11 @@ class MetricsCollector:
 
         # Store in Redis with expiration
         if self.redis:
-            await self.redis.lpush("request_metrics", json.dumps(metric))
-            await self.redis.expire("request_metrics", int(86400))  # 24 hours
+            try:
+                await self.redis.lpush("request_metrics", json.dumps(metric))
+                await self.redis.expire("request_metrics", 86400)  # 24 hours
+            except Exception as e:
+                print(f"Error storing request metric in Redis: {e}")
 
         # Track user activity
         if user_id:
@@ -106,11 +126,14 @@ class MetricsCollector:
         }
 
         if self.redis:
-            await self.redis.lpush("response_metrics", json.dumps(response_metric))
-            await self.redis.expire("response_metrics", int(86400))
+            try:
+                await self.redis.lpush("response_metrics", json.dumps(response_metric))
+                await self.redis.expire("response_metrics", 86400)
+            except Exception as e:
+                print(f"Error storing response metric in Redis: {e}")
 
     # User Activity Tracking
-    async def log_user_login(self, user_id: int, ip_address: str = None):
+    async def log_user_login(self, user_id: int, ip_address: Optional[str] = None):
         """Log user login event"""
         login_event = {
             "user_id": user_id,
@@ -121,8 +144,11 @@ class MetricsCollector:
         }
 
         if self.redis:
-            await self.redis.lpush(f"user_events:{user_id}", json.dumps(login_event))
-            await self.redis.expire(f"user_events:{user_id}", int(2592000))  # 30 days
+            try:
+                await self.redis.lpush(f"user_events:{user_id}", json.dumps(login_event))
+                await self.redis.expire(f"user_events:{user_id}", 2592000)  # 30 days
+            except Exception as e:
+                print(f"Error storing user login in Redis: {e}")
 
     async def log_document_upload(self, user_id: int, document_id: int, file_size: int):
         """Log document upload event"""
@@ -136,9 +162,12 @@ class MetricsCollector:
         }
 
         if self.redis:
-            await self.redis.lpush(f"user_events:{user_id}", json.dumps(upload_event))
-            await self.redis.lpush("document_events", json.dumps(upload_event))
-            await self.redis.expire("document_events", int(86400))
+            try:
+                await self.redis.lpush(f"user_events:{user_id}", json.dumps(upload_event))
+                await self.redis.lpush("document_events", json.dumps(upload_event))
+                await self.redis.expire("document_events", 86400)
+            except Exception as e:
+                print(f"Error storing document upload in Redis: {e}")
 
     async def log_query(self, user_id: int, query: str, processing_time: float):
         """Log RAG query event"""
@@ -152,9 +181,12 @@ class MetricsCollector:
         }
 
         if self.redis:
-            await self.redis.lpush(f"user_events:{user_id}", json.dumps(query_event))
-            await self.redis.lpush("query_metrics", json.dumps(query_event))
-            await self.redis.expire("query_metrics", int(86400))
+            try:
+                await self.redis.lpush(f"user_events:{user_id}", json.dumps(query_event))
+                await self.redis.lpush("query_metrics", json.dumps(query_event))
+                await self.redis.expire("query_metrics", 86400)
+            except Exception as e:
+                print(f"Error storing query metric in Redis: {e}")
 
     async def log_task_completion(self, task_type: str, processing_time: float, success: bool):
         """Log task completion event"""
@@ -167,8 +199,11 @@ class MetricsCollector:
         }
 
         if self.redis:
-            await self.redis.lpush("task_metrics", json.dumps(task_event))
-            await self.redis.expire("task_metrics", int(86400))
+            try:
+                await self.redis.lpush("task_metrics", json.dumps(task_event))
+                await self.redis.expire("task_metrics", 86400)
+            except Exception as e:
+                print(f"Error storing task completion in Redis: {e}")
 
     # System Metrics Collection
     async def _collect_system_metrics(self):
@@ -178,7 +213,12 @@ class MetricsCollector:
                 # CPU and Memory usage
                 cpu_percent = psutil.cpu_percent(interval=1)
                 memory = psutil.virtual_memory()
-                disk = psutil.disk_usage("/")
+                
+                try:
+                    disk = psutil.disk_usage("/")
+                except:
+                    # Fallback for Windows
+                    disk = psutil.disk_usage("C:\\")
 
                 # Network stats
                 network = psutil.net_io_counters()
@@ -202,8 +242,11 @@ class MetricsCollector:
 
                 # Store in Redis
                 if self.redis:
-                    await self.redis.lpush("system_metrics", json.dumps(system_metric))
-                    await self.redis.expire("system_metrics", int(86400))
+                    try:
+                        await self.redis.lpush("system_metrics", json.dumps(system_metric))
+                        await self.redis.expire("system_metrics", 86400)
+                    except Exception as e:
+                        print(f"Error storing system metrics in Redis: {e}")
 
                 # Check for alerts
                 await self._check_system_alerts(system_metric)
@@ -221,36 +264,30 @@ class MetricsCollector:
 
         # High CPU usage
         if metrics["cpu_percent"] > 80:
-            alerts.append(
-                {
-                    "type": "high_cpu",
-                    "value": metrics["cpu_percent"],
-                    "threshold": 80,
-                    "severity": "warning",
-                }
-            )
+            alerts.append({
+                "type": "high_cpu",
+                "value": metrics["cpu_percent"],
+                "threshold": 80,
+                "severity": "warning",
+            })
 
         # High memory usage
         if metrics["memory_percent"] > 85:
-            alerts.append(
-                {
-                    "type": "high_memory",
-                    "value": metrics["memory_percent"],
-                    "threshold": 85,
-                    "severity": "warning",
-                }
-            )
+            alerts.append({
+                "type": "high_memory",
+                "value": metrics["memory_percent"],
+                "threshold": 85,
+                "severity": "warning",
+            })
 
         # High disk usage
         if metrics["disk_percent"] > 90:
-            alerts.append(
-                {
-                    "type": "high_disk",
-                    "value": metrics["disk_percent"],
-                    "threshold": 90,
-                    "severity": "critical",
-                }
-            )
+            alerts.append({
+                "type": "high_disk",
+                "value": metrics["disk_percent"],
+                "threshold": 90,
+                "severity": "critical",
+            })
 
         # Store alerts if any
         if alerts and self.redis:
@@ -260,28 +297,44 @@ class MetricsCollector:
                 "date": datetime.utcnow().isoformat(),
             }
 
-            await self.redis.lpush("system_alerts", json.dumps(alert_event))
-            await self.redis.expire("system_alerts", int(86400))
+            try:
+                await self.redis.lpush("system_alerts", json.dumps(alert_event))
+                await self.redis.expire("system_alerts", 86400)
+            except Exception as e:
+                print(f"Error storing alerts in Redis: {e}")
 
     # Analytics and Reporting
     async def get_user_dashboard(self, user_id: int) -> Dict[str, Any]:
         """Get user dashboard metrics"""
-        if not self.redis:
-            return {}
+        # Try Redis first, fallback to in-memory
+        events = []
+        
+        if self.redis:
+            try:
+                user_events = await self.redis.lrange(f"user_events:{user_id}", 0, -1)
+                events = [json.loads(event_json) for event_json in user_events]
+            except Exception as e:
+                print(f"Error getting user events from Redis: {e}")
 
-        # Get user events from Redis
-        user_events = await self.redis.lrange(f"user_events:{user_id}", 0, -1)
-
-        # Parse events
-        events = [json.loads(event_json) for event_json in user_events]
+        # Fallback to in-memory data
+        if not events and user_id in self.user_activity:
+            # Create mock events from activity timestamps
+            events = [{
+                "event": "activity",
+                "timestamp": ts,
+                "date": datetime.fromtimestamp(ts).isoformat()
+            } for ts in self.user_activity[user_id]]
 
         # Calculate metrics
-        total_documents = len([e for e in events if e["event"] == "document_upload"])
-        total_queries = len([e for e in events if e["event"] == "rag_query"])
+        total_documents = len([e for e in events if e.get("event") == "document_upload"])
+        total_queries = len([e for e in events if e.get("event") == "rag_query"])
 
         # Recent activity (last 7 days)
         week_ago = datetime.utcnow() - timedelta(days=7)
-        recent_events = [e for e in events if datetime.fromisoformat(e["date"]) > week_ago]
+        recent_events = [
+            e for e in events 
+            if datetime.fromisoformat(e["date"]) > week_ago
+        ]
 
         return {
             "user_id": user_id,
@@ -294,18 +347,20 @@ class MetricsCollector:
 
     async def get_usage_metrics(self, user_id: int, days: int = 30) -> Dict[str, Any]:
         """Get user usage metrics for specified period"""
-        if not self.redis:
-            return {}
-
-        # Get user events
-        user_events = await self.redis.lrange(f"user_events:{user_id}", 0, -1)
+        events = []
+        
+        if self.redis:
+            try:
+                user_events = await self.redis.lrange(f"user_events:{user_id}", 0, -1)
+                events = [json.loads(event_json) for event_json in user_events]
+            except Exception as e:
+                print(f"Error getting usage metrics from Redis: {e}")
 
         # Filter by date range
         cutoff_date = datetime.utcnow() - timedelta(days=days)
         filtered_events = [
-            json.loads(event_json)
-            for event_json in user_events
-            if datetime.fromisoformat(json.loads(event_json)["date"]) > cutoff_date
+            e for e in events 
+            if datetime.fromisoformat(e["date"]) > cutoff_date
         ]
 
         # Group by day
@@ -315,8 +370,8 @@ class MetricsCollector:
             daily_activity[day] += 1
 
         # Calculate trends
-        document_uploads = len([e for e in filtered_events if e["event"] == "document_upload"])
-        queries = len([e for e in filtered_events if e["event"] == "rag_query"])
+        document_uploads = len([e for e in filtered_events if e.get("event") == "document_upload"])
+        queries = len([e for e in filtered_events if e.get("event") == "rag_query"])
 
         most_active_day = None
         if daily_activity:
@@ -333,18 +388,26 @@ class MetricsCollector:
 
     async def get_system_metrics(self) -> Dict[str, Any]:
         """Get system-wide metrics"""
-        if not self.redis:
-            return {}
+        parsed_system = []
+        parsed_requests = []
+        
+        if self.redis:
+            try:
+                # Get recent system metrics
+                system_metrics = await self.redis.lrange("system_metrics", 0, 59)  # Last hour
+                parsed_system = [json.loads(m) for m in system_metrics]
+                
+                # Get request metrics
+                request_metrics = await self.redis.lrange("request_metrics", 0, 999)  # Last 1000 requests
+                parsed_requests = [json.loads(m) for m in request_metrics]
+            except Exception as e:
+                print(f"Error getting system metrics from Redis: {e}")
 
-        # Get recent system metrics
-        system_metrics = await self.redis.lrange("system_metrics", 0, 59)  # Last hour
-
-        # Get request metrics
-        request_metrics = await self.redis.lrange("request_metrics", 0, 999)  # Last 1000 requests
-
-        # Parse and analyze
-        parsed_system = [json.loads(m) for m in system_metrics]
-        parsed_requests = [json.loads(m) for m in request_metrics]
+        # Fallback to in-memory data
+        if not parsed_system:
+            parsed_system = list(self.system_metrics)
+        if not parsed_requests:
+            parsed_requests = list(self.request_metrics)
 
         # Calculate averages
         avg_cpu = sum(m["cpu_percent"] for m in parsed_system) / len(parsed_system) if parsed_system else 0
@@ -352,7 +415,7 @@ class MetricsCollector:
 
         # Request stats
         total_requests = len(parsed_requests)
-        unique_users = len(set(m["user_id"] for m in parsed_requests if m["user_id"]))
+        unique_users = len(set(m["user_id"] for m in parsed_requests if m.get("user_id")))
 
         return {
             "system": {
@@ -385,22 +448,21 @@ class MetricsCollector:
                 }
 
         # Get slow queries (>5 seconds)
-        if not self.redis:
-            slow_queries = []
-        else:
-            query_metrics = await self.redis.lrange("query_metrics", 0, -1)
-            slow_queries = []
-            for query_json in query_metrics:
-                query = json.loads(query_json)
-                if query["processing_time"] > 5.0:
-                    slow_queries.append(
-                        {
+        slow_queries = []
+        if self.redis:
+            try:
+                query_metrics = await self.redis.lrange("query_metrics", 0, -1)
+                for query_json in query_metrics:
+                    query = json.loads(query_json)
+                    if query.get("processing_time", 0) > 5.0:
+                        slow_queries.append({
                             "user_id": query["user_id"],
                             "processing_time": query["processing_time"],
                             "query_length": query["query_length"],
                             "date": query["date"],
-                        }
-                    )
+                        })
+            except Exception as e:
+                print(f"Error getting slow queries: {e}")
 
         return {
             "endpoint_performance": performance_data,
@@ -411,7 +473,7 @@ class MetricsCollector:
     # Utility methods
     def _calculate_avg_query_time(self, events: List[Dict[str, Any]]) -> float:
         """Calculate average query processing time"""
-        query_events = [e for e in events if e["event"] == "rag_query"]
+        query_events = [e for e in events if e.get("event") == "rag_query"]
 
         if not query_events:
             return 0.0
@@ -423,14 +485,27 @@ class MetricsCollector:
         """Background task to cleanup old metrics"""
         while True:
             try:
-                # Placeholder for cleanup logic
+                # Clean up in-memory metrics
+                current_time = self.get_timestamp()
+                cutoff_time = current_time - 86400  # 24 hours
+                
+                # Clean user activity older than 24 hours
+                for user_id in list(self.user_activity.keys()):
+                    self.user_activity[user_id] = [
+                        ts for ts in self.user_activity[user_id] 
+                        if ts > cutoff_time
+                    ]
+                    if not self.user_activity[user_id]:
+                        del self.user_activity[user_id]
+                
                 await asyncio.sleep(3600)  # Run every hour
+                
             except Exception as e:
                 print(f"Error in metrics cleanup: {e}")
                 await asyncio.sleep(3600)
 
     async def log_user_activity(self, user_id: int, activity_type: str, metadata: Optional[Dict] = None):
-        """Generic user activity logger (wrapper over specific event loggers)."""
+        """Generic user activity logger"""
         event = {
             "user_id": user_id,
             "event": activity_type,
@@ -438,10 +513,13 @@ class MetricsCollector:
             "timestamp": self.get_timestamp(),
             "date": datetime.utcnow().isoformat(),
         }
+        
         if self.redis:
-            await self.redis.lpush(f"user_events:{user_id}", json.dumps(event))
-            await self.redis.expire(f"user_events:{user_id}", int(2592000))  # keep for 30 days
-
+            try:
+                await self.redis.lpush(f"user_events:{user_id}", json.dumps(event))
+                await self.redis.expire(f"user_events:{user_id}", 2592000)  # 30 days
+            except Exception as e:
+                print(f"Error logging user activity: {e}")
 
 # Global metrics collector instance
 metrics_collector = MetricsCollector()
