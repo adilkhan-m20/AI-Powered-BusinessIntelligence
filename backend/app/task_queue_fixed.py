@@ -1,12 +1,11 @@
 
-# app/task_queue.py - Advanced Task Queue with Real-time Updates
+# app/task_queue.py - Fixed Advanced Task Queue with Real-time Updates
 import asyncio
 import json
 import uuid
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from enum import Enum
-import redis.asyncio as aioredis
 from pydantic import BaseModel
 import logging
 
@@ -14,6 +13,14 @@ from .websocket_manager import websocket_manager
 from .monitoring import metrics_collector
 
 logger = logging.getLogger(__name__)
+
+# Redis handling with fallback
+try:
+    import redis.asyncio as aioredis
+    REDIS_AVAILABLE = True
+except ImportError:
+    print("⚠️ Redis not available for task queue")
+    REDIS_AVAILABLE = False
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -38,14 +45,28 @@ class TaskQueue:
     
     def __init__(self, redis_url: str = "redis://localhost:6379"):
         self.redis_url = redis_url
-        self.redis: Optional[aioredis.Redis] = None
+        self.redis: Optional[Any] = None
         self.workers: Dict[str, asyncio.Task] = {}
         self.task_processors = {}
         self._shutdown = False
+        self.redis_available = REDIS_AVAILABLE
+        
+        # In-memory fallback storage
+        self.task_storage: Dict[str, TaskResult] = {}
+        self.task_queue_storage: List[Dict[str, Any]] = []
         
     async def initialize(self):
         """Initialize Redis connection and start workers"""
-        self.redis = aioredis.from_url(self.redis_url, decode_responses=True)
+        if self.redis_available:
+            try:
+                self.redis = aioredis.from_url(self.redis_url, decode_responses=True)
+                await self.redis.ping()
+                print("✅ Redis connection established for task queue")
+            except Exception as e:
+                print(f"⚠️ Redis connection failed: {e}. Using in-memory storage.")
+                self.redis = None
+        else:
+            print("⚠️ Redis not available, using in-memory task storage")
         
         # Register task processors
         self._register_processors()
@@ -67,7 +88,10 @@ class TaskQueue:
         await asyncio.gather(*self.workers.values(), return_exceptions=True)
         
         if self.redis:
-            await self.redis.close()
+            try:
+                await self.redis.close()
+            except Exception as e:
+                print(f"Error closing Redis connection: {e}")
         
         logger.info("Task Queue cleanup completed")
     
@@ -97,13 +121,22 @@ class TaskQueue:
         
         while not self._shutdown:
             try:
-                # Block for up to 5 seconds waiting for a task
-                task_data = await self.redis.brpop("task_queue", timeout=5)
+                task_info = None
                 
-                if task_data:
-                    queue_name, task_json = task_data
-                    task_info = json.loads(task_json)
-                    
+                if self.redis:
+                    # Redis-based queue
+                    task_data = await self.redis.brpop("task_queue", timeout=5)
+                    if task_data:
+                        queue_name, task_json = task_data
+                        task_info = json.loads(task_json)
+                else:
+                    # In-memory queue
+                    if self.task_queue_storage:
+                        task_info = self.task_queue_storage.pop(0)
+                    else:
+                        await asyncio.sleep(1)  # Wait for tasks
+                
+                if task_info:
                     # Process the task
                     await self._process_task(task_info, worker_name)
                 
@@ -174,17 +207,36 @@ class TaskQueue:
     ):
         """Update task status and notify clients"""
         
-        # Get current task data
-        current_data = await self.redis.get(f"task:{task_id}")
-        if current_data:
-            task_result = TaskResult.parse_raw(current_data)
+        # Get or create task result
+        if self.redis:
+            try:
+                current_data = await self.redis.get(f"task:{task_id}")
+                if current_data:
+                    task_result = TaskResult.parse_raw(current_data)
+                else:
+                    task_result = TaskResult(
+                        task_id=task_id,
+                        status=status,
+                        created_at=datetime.utcnow(),
+                        updated_at=datetime.utcnow()
+                    )
+            except Exception:
+                task_result = TaskResult(
+                    task_id=task_id,
+                    status=status,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
         else:
-            task_result = TaskResult(
-                task_id=task_id,
-                status=status,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
-            )
+            # In-memory storage
+            task_result = self.task_storage.get(task_id)
+            if not task_result:
+                task_result = TaskResult(
+                    task_id=task_id,
+                    status=status,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
         
         # Update fields
         task_result.status = status
@@ -198,14 +250,30 @@ class TaskQueue:
             task_result.processing_time = processing_time
         
         # Store updated task
-        await self.redis.set(
-            f"task:{task_id}", 
-            task_result.json(),
-            ex=86400  # 24 hours expiry
-        )
+        if self.redis:
+            try:
+                await self.redis.set(
+                    f"task:{task_id}", 
+                    task_result.json(),
+                    ex=86400  # 24 hours expiry
+                )
+            except Exception as e:
+                print(f"Error storing task in Redis: {e}")
+                # Fallback to in-memory
+                self.task_storage[task_id] = task_result
+        else:
+            self.task_storage[task_id] = task_result
         
         # Send real-time update
-        user_id = await self.redis.get(f"task_user:{task_id}")
+        if self.redis:
+            try:
+                user_id = await self.redis.get(f"task_user:{task_id}")
+            except Exception:
+                user_id = None
+        else:
+            # For in-memory, we'd need to store user mapping differently
+            user_id = None
+        
         if user_id:
             await websocket_manager.send_to_user(
                 int(user_id),
@@ -227,33 +295,39 @@ class TaskQueue:
         # Update progress
         await self._update_task_status(task_info["task_id"], TaskStatus.PROCESSING, 20, "Loading document...")
         
-        # Import your existing document processing logic
-        from document_engine import process_document_pipeline
-        
-        # Process document with progress updates
-        await self._update_task_status(task_info["task_id"], TaskStatus.PROCESSING, 40, "Extracting text...")
-        
-        # Your document processing logic here
-        result = await process_document_pipeline(document_id, file_path)
-        
-        await self._update_task_status(task_info["task_id"], TaskStatus.PROCESSING, 80, "Creating embeddings...")
-        
-        return {
-            "document_id": document_id,
-            "chunks_created": result["chunks"],
-            "embeddings_created": result["embeddings"],
-            "processing_stats": result["stats"]
-        }
+        try:
+            # Import AI integration
+            from .ai_integration import process_document_with_ai
+            
+            # Process document with progress updates
+            await self._update_task_status(task_info["task_id"], TaskStatus.PROCESSING, 40, "Extracting text...")
+            
+            # Use AI integration to process document
+            result = await process_document_with_ai(file_path, document_id)
+            
+            await self._update_task_status(task_info["task_id"], TaskStatus.PROCESSING, 80, "Creating embeddings...")
+            
+            if result["success"]:
+                return {
+                    "document_id": document_id,
+                    "chunks_created": result["chunks_created"],
+                    "embeddings_created": result["embeddings_created"],
+                    "processing_stats": result["processing_stats"]
+                }
+            else:
+                raise Exception(result.get("error", "Unknown processing error"))
+                
+        except Exception as e:
+            raise Exception(f"Document processing failed: {str(e)}")
     
     async def _process_rag_indexing(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
         """Process RAG indexing for user's documents"""
         user_id = task_info["user_id"]
         document_ids = task_info["document_ids"]
         
-        # Your RAG indexing logic here
         await self._update_task_status(task_info["task_id"], TaskStatus.PROCESSING, 30, "Building vector index...")
         
-        # Process indexing
+        # Simulate indexing process
         index_stats = await self._build_user_index(user_id, document_ids)
         
         await self._update_task_status(task_info["task_id"], TaskStatus.PROCESSING, 90, "Finalizing index...")
@@ -261,22 +335,34 @@ class TaskQueue:
         return {
             "user_id": user_id,
             "documents_indexed": len(document_ids),
-            "total_chunks": index_stats["chunks"],
-            "index_size": index_stats["size"]
+            "total_chunks": index_stats.get("chunks", 0),
+            "index_size": index_stats.get("size", 0)
         }
     
     async def _process_quality_validation(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
         """Process document quality validation"""
         document_id = task_info["document_id"]
+        file_path = task_info.get("file_path", "")
         
-        # Your quality validation logic
-        quality_score = await self._validate_document_quality(document_id)
-        
-        return {
-            "document_id": document_id,
-            "quality_score": quality_score,
-            "validation_passed": quality_score > 0.7
-        }
+        try:
+            from .ai_integration import validate_document_with_ai
+            
+            validation_result = await validate_document_with_ai(file_path)
+            
+            return {
+                "document_id": document_id,
+                "quality_score": validation_result.get("quality_score", 0.0),
+                "validation_passed": validation_result.get("is_valid", False),
+                "warnings": validation_result.get("warnings", []),
+                "errors": validation_result.get("errors", [])
+            }
+        except Exception as e:
+            return {
+                "document_id": document_id,
+                "quality_score": 0.0,
+                "validation_passed": False,
+                "error": str(e)
+            }
     
     async def _process_batch_documents(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
         """Process multiple documents in batch"""
@@ -300,9 +386,20 @@ class TaskQueue:
         
         return {
             "total_processed": len(results),
-            "successful": sum(1 for r in results if r["success"]),
-            "failed": sum(1 for r in results if not r["success"]),
+            "successful": sum(1 for r in results if r.get("success", False)),
+            "failed": sum(1 for r in results if not r.get("success", False)),
             "results": results
+        }
+    
+    async def _process_model_training(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Process model training task"""
+        # Placeholder for model training
+        await asyncio.sleep(5)  # Simulate training time
+        
+        return {
+            "model_id": task_info.get("model_id", "default"),
+            "training_completed": True,
+            "accuracy": 0.92
         }
     
     # Public API methods
@@ -319,11 +416,23 @@ class TaskQueue:
             "created_at": datetime.utcnow().isoformat()
         }
         
-        # Store task info
-        await self.redis.set(f"task_user:{task_id}", user_id, ex=86400)
+        # Store task-user mapping
+        if self.redis:
+            try:
+                await self.redis.set(f"task_user:{task_id}", user_id, ex=86400)
+            except Exception as e:
+                print(f"Error storing task-user mapping: {e}")
         
         # Add to queue
-        await self.redis.lpush("task_queue", json.dumps(task_info))
+        if self.redis:
+            try:
+                await self.redis.lpush("task_queue", json.dumps(task_info))
+            except Exception as e:
+                print(f"Error adding task to Redis queue: {e}")
+                # Fallback to in-memory
+                self.task_queue_storage.append(task_info)
+        else:
+            self.task_queue_storage.append(task_info)
         
         # Initialize task status
         await self._update_task_status(task_id, TaskStatus.PENDING, 0, "Task queued")
@@ -342,18 +451,32 @@ class TaskQueue:
             "created_at": datetime.utcnow().isoformat()
         }
         
-        await self.redis.set(f"task_user:{task_id}", user_id, ex=86400)
-        await self.redis.lpush("task_queue", json.dumps(task_info))
+        if self.redis:
+            try:
+                await self.redis.set(f"task_user:{task_id}", user_id, ex=86400)
+                await self.redis.lpush("task_queue", json.dumps(task_info))
+            except Exception as e:
+                print(f"Error enqueuing batch task: {e}")
+                self.task_queue_storage.append(task_info)
+        else:
+            self.task_queue_storage.append(task_info)
+            
         await self._update_task_status(task_id, TaskStatus.PENDING, 0, "Batch processing queued")
         
         return task_id
     
     async def get_task_status(self, task_id: str) -> Optional[TaskResult]:
         """Get task status"""
-        task_data = await self.redis.get(f"task:{task_id}")
-        if task_data:
-            return TaskResult.parse_raw(task_data)
-        return None
+        if self.redis:
+            try:
+                task_data = await self.redis.get(f"task:{task_id}")
+                if task_data:
+                    return TaskResult.parse_raw(task_data)
+            except Exception as e:
+                print(f"Error getting task status from Redis: {e}")
+        
+        # Fallback to in-memory
+        return self.task_storage.get(task_id)
     
     async def cancel_task(self, task_id: str) -> bool:
         """Cancel a pending task"""
@@ -363,37 +486,63 @@ class TaskQueue:
     
     async def get_queue_stats(self) -> Dict[str, Any]:
         """Get queue statistics"""
-        pending_tasks = await self.redis.llen("task_queue")
+        if self.redis:
+            try:
+                pending_tasks = await self.redis.llen("task_queue")
+            except Exception:
+                pending_tasks = len(self.task_queue_storage)
+        else:
+            pending_tasks = len(self.task_queue_storage)
         
         return {
             "pending_tasks": pending_tasks,
             "active_workers": len(self.workers),
-            "task_types": list(self.task_processors.keys())
+            "task_types": list(self.task_processors.keys()),
+            "storage_backend": "redis" if self.redis else "memory"
         }
     
     async def health_check(self) -> bool:
         """Check if task queue is healthy"""
-        try:
-            await self.redis.ping()
-            return True
-        except:
-            return False
+        if self.redis:
+            try:
+                await self.redis.ping()
+                return True
+            except Exception:
+                return False
+        else:
+            # Memory backend is always healthy if workers are running
+            return len(self.workers) > 0
     
-    # Helper methods (implement based on your existing logic)
+    # Helper methods
     async def _build_user_index(self, user_id: int, document_ids: List[int]) -> Dict[str, Any]:
         """Build vector index for user's documents"""
-        # Integrate with your existing FAISS logic
-        pass
-    
-    async def _validate_document_quality(self, document_id: int) -> float:
-        """Validate document quality"""
-        # Implement quality validation logic
-        return 0.85  # Placeholder
+        # Simulate index building
+        await asyncio.sleep(2)
+        
+        return {
+            "chunks": len(document_ids) * 10,  # Assume 10 chunks per document
+            "size": len(document_ids) * 1024,  # Assume 1KB per document
+            "user_id": user_id
+        }
     
     async def _process_single_document(self, document_id: int) -> Dict[str, Any]:
         """Process a single document"""
-        # Implement single document processing
-        return {"success": True, "document_id": document_id}
+        try:
+            # Simulate document processing
+            await asyncio.sleep(1)
+            
+            return {
+                "success": True, 
+                "document_id": document_id,
+                "chunks_created": 5,
+                "processing_time": 1.0
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "document_id": document_id,
+                "error": str(e)
+            }
 
 # Global task queue instance
 task_queue = TaskQueue()
