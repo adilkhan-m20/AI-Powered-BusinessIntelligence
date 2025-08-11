@@ -1,17 +1,18 @@
 
-# backend/app/ai_integration.py - Updated Bridge to AI Service
+# backend/app/ai_integration.py - Fixed Bridge to AI Service
 import os
 import sys
 import asyncio
-import requests
 from typing import Dict, Any, List, Optional
 from pathlib import Path
-import tempfile
-import shutil
 
-# Add ai-service to Python path
-AI_SERVICE_PATH = Path(__file__).parent.parent / "ai-service"
-sys.path.append(str(AI_SERVICE_PATH))
+# Resolve AI service path properly
+AI_SERVICE_PATH = Path(__file__).parent.parent.parent / "ai-service"
+AI_SERVICE_PATH = AI_SERVICE_PATH.resolve()
+
+# Add to Python path if not already there
+if str(AI_SERVICE_PATH) not in sys.path:
+    sys.path.insert(0, str(AI_SERVICE_PATH))
 
 class AIServiceIntegration:
     """Integration bridge to your existing AI service"""
@@ -59,83 +60,31 @@ class AIServiceIntegration:
         """Synchronous wrapper for your existing document processing"""
         
         try:
-            # Import your existing modules (with error handling)
-            try:
-                from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredExcelLoader
-                from langchain.text_splitter import RecursiveCharacterTextSplitter
-                from langchain_community.embeddings import OpenAIEmbeddings
-                from langchain_community.vectorstores import FAISS
-                from document_engine import upsert_documents
-            except ImportError as e:
-                raise Exception(f"Failed to import AI modules: {str(e)}")
-            
-            # Determine file type and create appropriate loader
-            loader = self._create_document_loader(document_path)
-            
-            if not loader:
-                raise Exception(f"Unsupported file type: {document_path}")
-            
-            # Load and process document
-            docs = loader.load()
-            
-            # Split documents into chunks (using your existing logic)
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200
-            )
-            documents = text_splitter.split_documents(docs)
-            
-            # Update FAISS database (using your existing function)
-            DB_PATH = os.path.join(str(self.ai_service_path), "faiss_index")
-            embeddings = OpenAIEmbeddings()
-            
-            # Change to ai-service directory to maintain your file paths
+            # Change to ai-service directory to maintain file paths
             original_cwd = os.getcwd()
             os.chdir(str(self.ai_service_path))
             
             try:
-                upsert_documents(documents)
+                # Import document processing function
+                from document_engine import process_document_pipeline
+                
+                # Process the document
+                result = process_document_pipeline(document_id, document_path)
+                
+                return {
+                    "chunks": result.get("chunks", 0),
+                    "embeddings": result.get("embeddings", 0),
+                    "stats": result.get("stats", {}),
+                    "faiss_updated": True
+                }
+                
             finally:
                 os.chdir(original_cwd)
-            
-            # Return processing statistics
-            return {
-                "chunks": len(documents),
-                "embeddings": len(documents),  # Assuming 1 embedding per chunk
-                "stats": {
-                    "processing_time": 0,  # You can add timing if needed
-                    "file_size": os.path.getsize(document_path),
-                    "original_docs": len(docs),
-                    "total_chunks": len(documents)
-                },
-                "faiss_updated": True
-            }
-            
+                
+        except ImportError as e:
+            raise Exception(f"Failed to import AI modules: {str(e)}")
         except Exception as e:
             raise Exception(f"Document processing failed: {str(e)}")
-    
-    def _create_document_loader(self, document_path: str):
-        """Create appropriate document loader based on file type"""
-        try:
-            from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredExcelLoader
-            
-            # Get file extension
-            _, ext = os.path.splitext(document_path.lower())
-            
-            # Create appropriate loader
-            if ext == ".txt":
-                return TextLoader(document_path)
-            elif ext == ".pdf":
-                return PyPDFLoader(document_path)
-            elif ext in [".xlsx", ".xls"]:
-                return UnstructuredExcelLoader(document_path)
-            else:
-                # Try TextLoader as fallback
-                return TextLoader(document_path)
-                
-        except Exception as e:
-            print(f"Error creating document loader: {e}")
-            return None
     
     async def query_rag_system(self, query: str, user_id: int, filters: Optional[Dict] = None) -> Dict[str, Any]:
         """Query your existing RAG system"""
@@ -162,19 +111,14 @@ class AIServiceIntegration:
         """Synchronous wrapper for RAG query using your existing code"""
         
         try:
-            # Import your existing RAG modules
-            from langchain_core.messages import HumanMessage
-            from langchain_openai import OpenAIEmbeddings
-            from langchain_community.vectorstores import FAISS
-            from RAG import rag_agent, retriever_tool
-            
             # Change to ai-service directory to access FAISS index
             original_cwd = os.getcwd()
             os.chdir(str(self.ai_service_path))
             
             try:
-                # Load the FAISS database (using your existing logic)
-                db = FAISS.load_local("faiss_index", OpenAIEmbeddings(), allow_dangerous_deserialization=True)
+                # Import your existing RAG modules
+                from langchain_core.messages import HumanMessage
+                from RAG import rag_agent, retriever_tool
                 
                 # Create the message for your RAG agent
                 messages = [HumanMessage(content=query)]
@@ -194,12 +138,14 @@ class AIServiceIntegration:
                         source_docs = retriever_result.split("Document ")
                         for i, doc in enumerate(source_docs[1:], 1):  # Skip first empty element
                             if doc.strip():
+                                # Clean up the document text
+                                clean_text = doc.strip()[:200]
                                 sources_info.append({
                                     "document_id": f"doc_{i}",
                                     "document_name": f"Document {i}",
-                                    "chunk_text": doc[:200] + "..." if len(doc) > 200 else doc,
+                                    "chunk_text": clean_text + ("..." if len(doc.strip()) > 200 else ""),
                                     "page_number": None,
-                                    "relevance_score": 0.8 - (i * 0.1)  # Decreasing relevance
+                                    "relevance_score": max(0.1, 0.9 - (i * 0.1))  # Decreasing relevance
                                 })
                 except Exception as source_error:
                     print(f"Error extracting sources: {source_error}")
@@ -207,7 +153,7 @@ class AIServiceIntegration:
                 return {
                     "response": response_content,
                     "sources": sources_info,
-                    "confidence": 0.85,  # You can implement confidence scoring
+                    "confidence": min(0.95, 0.7 + (len(sources_info) * 0.05)),  # Dynamic confidence
                     "tool_calls": len([msg for msg in result.get('messages', []) if hasattr(msg, 'tool_calls')])
                 }
                 
@@ -291,6 +237,29 @@ class AIServiceIntegration:
                 "file_size": 0
             }
     
+    def _create_document_loader(self, document_path: str):
+        """Create appropriate document loader based on file type"""
+        try:
+            from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredExcelLoader
+            
+            # Get file extension
+            _, ext = os.path.splitext(document_path.lower())
+            
+            # Create appropriate loader
+            if ext == ".txt":
+                return TextLoader(document_path, encoding='utf-8')
+            elif ext == ".pdf":
+                return PyPDFLoader(document_path)
+            elif ext in [".xlsx", ".xls"]:
+                return UnstructuredExcelLoader(document_path)
+            else:
+                # Try TextLoader as fallback
+                return TextLoader(document_path, encoding='utf-8')
+                
+        except Exception as e:
+            print(f"Error creating document loader: {e}")
+            return None
+    
     async def get_rag_agent_stats(self) -> Dict[str, Any]:
         """Get statistics about the RAG system"""
         try:
@@ -306,12 +275,11 @@ class AIServiceIntegration:
                 if os.path.exists("faiss_index"):
                     db = FAISS.load_local("faiss_index", OpenAIEmbeddings(), allow_dangerous_deserialization=True)
                     
-                    # Get basic stats (FAISS doesn't provide direct count, so we estimate)
                     return {
                         "faiss_index_exists": True,
-                        "estimated_chunks": "Available",  # FAISS doesn't expose count easily
+                        "estimated_chunks": "Available",
                         "index_path": "faiss_index",
-                        "embedding_model": "text-embedding-ada-002"  # Default OpenAI model
+                        "embedding_model": "text-embedding-ada-002"
                     }
                 else:
                     return {

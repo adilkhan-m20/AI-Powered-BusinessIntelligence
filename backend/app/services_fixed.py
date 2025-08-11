@@ -1,20 +1,18 @@
 
-# backend/app/services.py - Business Logic Services
+# backend/app/services.py - Fixed Business Logic Services
 import os
 import uuid
+import json
 import aiofiles
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Sequence
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import text
 from fastapi import UploadFile, HTTPException
+
 from .models import Document, User, DocumentChunk, Query
 from .ai_integration import ai_service
-from .task_queue import task_queue
-from .monitoring import metrics_collector
-from typing import Sequence
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 from .database import engine
 
 class DocumentService:
@@ -29,7 +27,7 @@ class DocumentService:
         """Create document record in database"""
         
         # Generate unique filename
-        filename = file.filename or ""
+        filename = file.filename or "unknown"
         file_extension = os.path.splitext(filename)[1]
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         file_path = f"uploads/{unique_filename}"
@@ -44,10 +42,10 @@ class DocumentService:
         # Create database record
         document = Document(
             filename=unique_filename,
-            original_filename=file.filename,
+            original_filename=file.filename or "unknown",
             file_path=file_path,
             file_size=len(content),
-            mime_type=file.content_type,
+            mime_type=file.content_type or "application/octet-stream",
             owner_id=user_id,
             status="pending"
         )
@@ -169,8 +167,6 @@ class RAGService:
     @staticmethod
     async def get_user_rag_system(user_id: int):
         """Get or create RAG system for user"""
-        # This would integrate with your existing RAG system
-        # For now, return a simple wrapper
         return UserRAGSystem(user_id)
 
 class UserRAGSystem:
@@ -239,7 +235,8 @@ class AnalyticsService:
     @staticmethod
     async def log_user_activity(user_id: int, activity_type: str, metadata: Optional[Dict] = None):
         """Log user activity"""
-        await metrics_collector.log_user_activity(user_id, activity_type, metadata) # type: ignore
+        from .monitoring import metrics_collector
+        await metrics_collector.log_user_activity(user_id, activity_type, metadata)
     
     @staticmethod
     async def get_user_stats(db: AsyncSession, user_id: int) -> Dict[str, Any]:
@@ -268,9 +265,10 @@ async def check_ai_models_health() -> bool:
     """Check AI models health"""
     try:
         # Test basic AI service connectivity
-        test_result = await ai_service.validate_document_quality("test")
-        return True
-    except Exception:
+        test_result = await ai_service.validate_document_quality("dummy_path")
+        return test_result.get("is_valid") is not None
+    except Exception as e:
+        print(f"AI health check failed: {e}")
         return False
     
 async def check_database_health() -> bool:
@@ -282,9 +280,8 @@ async def check_database_health() -> bool:
     except Exception as e:
         print(f"Database health check failed: {e}")
         return False
-    
-    
-    
+
+# Convenience functions for main.py
 async def create_document_record(db, file, user_id):
     return await DocumentService.create_document_record(db, file, user_id)
 
