@@ -17,7 +17,7 @@ from .models import *
 from .services_fixed import *
 from .websocket_manager import WebSocketManager
 from .task_queue_fixed import task_queue
-from .monitoring import metrics_collector
+from app.monitoring import metrics_collector
 
 # Global managers
 websocket_manager = WebSocketManager()
