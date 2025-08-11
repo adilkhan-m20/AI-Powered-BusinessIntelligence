@@ -13,6 +13,9 @@ from .ai_integration import ai_service
 from .task_queue import task_queue
 from .monitoring import metrics_collector
 from typing import Sequence
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from .database import engine
 
 class DocumentService:
     """Document management service"""
@@ -269,3 +272,33 @@ async def check_ai_models_health() -> bool:
         return True
     except Exception:
         return False
+    
+async def check_database_health() -> bool:
+    """Check if the database connection is alive."""
+    try:
+        async with AsyncSession(engine) as session:
+            await session.execute(text("SELECT 1"))
+        return True
+    except Exception as e:
+        print(f"Database health check failed: {e}")
+        return False
+    
+    
+    
+async def create_document_record(db, file, user_id):
+    return await DocumentService.create_document_record(db, file, user_id)
+
+async def validate_document(file):
+    return await ValidationService.validate_document(file)
+
+async def get_user_documents(db, user_id, skip: int = 0, limit: int = 100):
+    return await DocumentService.get_user_documents(db, user_id, skip, limit)
+
+async def get_document_by_id(db, document_id, user_id):
+    return await DocumentService.get_document_by_id(db, document_id, user_id)
+
+async def get_processed_documents(db, user_id):
+    return await DocumentService.get_processed_documents(db, user_id)
+
+async def get_user_rag_system(user_id: int):
+    return await RAGService.get_user_rag_system(user_id)

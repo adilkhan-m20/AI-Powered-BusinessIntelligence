@@ -408,6 +408,22 @@ class MetricsCollector:
             except Exception as e:
                 print(f"Error in metrics cleanup: {e}")
                 await asyncio.sleep(3600)
+                
+    async def log_user_activity(self, user_id: int, activity_type: str, metadata: Optional[Dict] = None):
+        """Generic user activity logger (wrapper over specific event loggers)."""
+        import json
+        from datetime import datetime
+
+        event = {
+            "user_id": user_id,
+            "event": activity_type,
+            "metadata": metadata or {},
+            "timestamp": self.get_timestamp(),
+            "date": datetime.utcnow().isoformat()
+        }
+        await self.redis.lpush(f"user_events:{user_id}", json.dumps(event))
+        await self.redis.expire(f"user_events:{user_id}", 2592000)  # keep for 30 days
+
 
 # Global metrics collector instance
 metrics_collector = MetricsCollector()
