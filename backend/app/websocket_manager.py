@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from typing import Dict, List, Set, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import WebSocket, WebSocketDisconnect
 from collections import defaultdict
 
@@ -70,7 +70,7 @@ class WebSocketManager:
             logger.error(f"Failed to connect user {user_id}: {e}")
             return False
     
-    async def disconnect(self, user_id: int, websocket: WebSocket = None):
+    async def disconnect(self, user_id: int, websocket: Optional[WebSocket] = None):
         """Disconnect user's WebSocket connections"""
         if websocket:
             # Remove specific connection
@@ -131,7 +131,7 @@ class WebSocketManager:
         
         return success_count > 0
     
-    async def send_to_all(self, message: Dict[str, Any], exclude_users: List[int] = None) -> int:
+    async def send_to_all(self, message: Dict[str, Any], exclude_users: Optional[List[int]] = None):
         """Send message to all connected users"""
         exclude_users = exclude_users or []
         sent_count = 0
