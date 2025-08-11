@@ -8,11 +8,11 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from fastapi import UploadFile, HTTPException
-
 from .models import Document, User, DocumentChunk, Query
 from .ai_integration import ai_service
 from .task_queue import task_queue
 from .monitoring import metrics_collector
+from typing import Sequence
 
 class DocumentService:
     """Document management service"""
@@ -26,7 +26,8 @@ class DocumentService:
         """Create document record in database"""
         
         # Generate unique filename
-        file_extension = os.path.splitext(file.filename)[1]
+        filename = file.filename or ""
+        file_extension = os.path.splitext(filename)[1]
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         file_path = f"uploads/{unique_filename}"
         
@@ -60,7 +61,7 @@ class DocumentService:
         user_id: int, 
         skip: int = 0, 
         limit: int = 100
-    ) -> List[Document]:
+    ) -> Sequence[Document]:
         """Get user's documents with pagination"""
         
         query = (
@@ -95,7 +96,7 @@ class DocumentService:
     async def get_processed_documents(
         db: AsyncSession, 
         user_id: int
-    ) -> List[Document]:
+    ) -> Sequence[Document]:
         """Get user's processed documents"""
         
         query = (
@@ -130,7 +131,8 @@ class ValidationService:
         
         # File type validation
         ALLOWED_EXTENSIONS = ['.pdf', '.txt', '.docx', '.xlsx', '.csv']
-        file_extension = os.path.splitext(file.filename)[1].lower()
+        filename = file.filename or ""
+        file_extension = os.path.splitext(filename)[1].lower()
         
         if file_extension not in ALLOWED_EXTENSIONS:
             errors.append(f"Unsupported file type: {file_extension}")
@@ -232,9 +234,9 @@ class AnalyticsService:
     """Analytics and metrics service"""
     
     @staticmethod
-    async def log_user_activity(user_id: int, activity_type: str, metadata: Dict = None):
+    async def log_user_activity(user_id: int, activity_type: str, metadata: Optional[Dict] = None):
         """Log user activity"""
-        await metrics_collector.log_user_activity(user_id, activity_type, metadata)
+        await metrics_collector.log_user_activity(user_id, activity_type, metadata) # type: ignore
     
     @staticmethod
     async def get_user_stats(db: AsyncSession, user_id: int) -> Dict[str, Any]:

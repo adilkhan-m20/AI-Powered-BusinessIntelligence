@@ -9,7 +9,7 @@ from fastapi import HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-
+from jwt import InvalidTokenError
 from .database import get_db
 from .models import User
 
@@ -73,7 +73,7 @@ class AuthService:
                 detail="Token has expired",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        except jwt.JWTError:
+        except InvalidTokenError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",
@@ -92,7 +92,7 @@ class AuthService:
             return None
         
         if not AuthService.verify_password(password, user.hashed_password):
-            return None
+            return None 
         
         # Update last login
         user.last_login = datetime.utcnow()
