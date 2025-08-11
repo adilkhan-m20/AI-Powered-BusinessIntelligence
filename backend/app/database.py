@@ -4,6 +4,7 @@ import os
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from typing import AsyncGenerator
+from sqlalchemy import text
 
 # Database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./multimodal_ai.db")
@@ -50,7 +51,7 @@ async def check_database_health() -> bool:
     """Check database connection health"""
     try:
         async with engine.begin() as conn:
-            await conn.execute("SELECT 1")
+            await conn.execute(text("SELECT 1"))
         return True
     except Exception:
         return False

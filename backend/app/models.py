@@ -7,6 +7,9 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from enum import Enum
+from sqlalchemy.orm import Mapped, mapped_column
+from pydantic import BaseModel, Field
+from typing import Annotated
 
 Base = declarative_base()
 
@@ -14,50 +17,49 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
     
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(50), unique=True, index=True, nullable=False)
-    email = Column(String(100), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    is_active = Column(Boolean, default=True)
-    is_admin = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_login = Column(DateTime, nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    is_admin: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    last_login: Mapped[Optional[datetime]]
     
-    # Relationships
-    documents = relationship("Document", back_populates="owner")
-    queries = relationship("Query", back_populates="user")
+    documents: Mapped[list["Document"]] = relationship("Document", back_populates="owner")
+    queries: Mapped[list["Query"]] = relationship("Query", back_populates="user")
 
 class Document(Base):
     __tablename__ = "documents"
     
-    id = Column(Integer, primary_key=True, index=True)
-    filename = Column(String(255), nullable=False)
-    original_filename = Column(String(255), nullable=False)
-    file_path = Column(String(500), nullable=False)
-    file_size = Column(Integer, nullable=False)
-    mime_type = Column(String(100), nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     
     # Processing status
-    status = Column(String(50), default="pending")  # pending, processing, completed, failed
-    task_id = Column(String(100), nullable=True)
-    
+    status: Mapped[str] = mapped_column(String(50), default="pending")  # pending, processing, completed, failed
+    task_id: Mapped[str] = mapped_column(String(100), nullable=True)
+
     # Content analysis
-    text_content = Column(Text, nullable=True)
-    chunk_count = Column(Integer, default=0)
-    embedding_count = Column(Integer, default=0)
-    
+    text_content: Mapped[str] = mapped_column(Text, nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_count: Mapped[int] = mapped_column(Integer, default=0)
+
     # Quality metrics
-    quality_score = Column(Float, nullable=True)
-    validation_errors = Column(JSON, nullable=True)
-    
+    quality_score: Mapped[float] = mapped_column(Float, nullable=True)
+    validation_errors: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=True)
+
     # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    processed_at = Column(DateTime, nullable=True)
-    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    processed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
     # Foreign keys
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
+    owner_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+
     # Relationships
     owner = relationship("User", back_populates="documents")
     chunks = relationship("DocumentChunk", back_populates="document")
@@ -114,7 +116,7 @@ class SystemMetric(Base):
     id = Column(Integer, primary_key=True, index=True)
     metric_type = Column(String(50), nullable=False)  # cpu, memory, requests, etc.
     metric_value = Column(Float, nullable=False)
-    metadata = Column(JSON, nullable=True)
+    metric_metadata = Column(JSON, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
 class UserSession(Base):
@@ -138,7 +140,7 @@ class DocumentStatus(str, Enum):
 
 class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
-    email: str = Field(..., regex=r'^[^@]+@[^@]+\.[^@]+$')
+    email: str = Field(..., pattern=r'^[^@]+@[^@]+\.[^@]+$')
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
@@ -224,7 +226,7 @@ class RAGResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 class BatchProcessingRequest(BaseModel):
-    document_ids: List[int] = Field(..., min_items=1, max_items=50)
+    document_ids: Annotated[List[int], Field(min_length=1, max_length=50)]
     processing_options: Optional[Dict[str, Any]] = None
 
 class BatchProcessingResponse(BaseModel):
