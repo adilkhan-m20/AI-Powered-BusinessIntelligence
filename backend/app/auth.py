@@ -323,6 +323,12 @@ def create_refresh_token(data: Dict[str, Any]) -> str:
     """Shortcut for creating refresh token"""
     return AuthService.create_refresh_token(data)
 
-async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
-    """Shortcut for user authentication"""
-    return await AuthService.authenticate_user(db, username, password)
+async def authenticate_user(db: AsyncSession, username: str, password: str):
+    """Validate user credentials."""
+    result = await db.execute(
+        select(User).where(User.username == username)
+    )
+    user = result.scalars().first()
+    if not user or not pwd_context.verify(password, user.hashed_password):
+        return None
+    return user

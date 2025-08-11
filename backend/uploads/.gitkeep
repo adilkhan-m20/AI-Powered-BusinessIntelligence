@@ -1,0 +1,12 @@
+
+# Keep this directory in Git
+
+This file ensures that the uploads directory is tracked by Git even when empty.
+
+The uploads directory is essential for:
+- File storage during document processing
+- Temporary file handling
+- User file management
+- System file organization
+
+Do not delete this file.
