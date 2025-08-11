@@ -11,7 +11,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from .database import get_db, engine, create_tables
 from .auth import get_current_user, create_access_token
 from .models import *
@@ -19,6 +18,10 @@ from .services import *
 from .websocket_manager import WebSocketManager
 from .task_queue import task_queue
 from .monitoring import metrics_collector
+from .task_queue import TaskStatus
+from .models import DocumentStatus
+from .services import check_database_health
+from .auth import get_current_user, create_access_token, authenticate_user, get_current_admin_user
 
 # Global managers
 websocket_manager = WebSocketManager()
@@ -96,8 +99,8 @@ async def upload_document(
     
     # Validate file
     validation_result = await validate_document(file)
-    if not validation_result.is_valid:
-        raise HTTPException(status_code=400, detail=validation_result.errors)
+    if not validation_result["is_valid"]:
+        raise HTTPException(status_code=400, detail=validation_result["errors"])
     
     # Create document record
     document = await create_document_record(db, file, user.id)
@@ -139,14 +142,26 @@ async def get_document_status(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    # Get processing status from task queue
-    status = await task_queue.get_task_status(document.task_id)
+    task_result = await task_queue.get_task_status(document.task_id)
+    if not task_result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    status_value = (
+        task_result.status.value
+        if hasattr(task_result.status, "value")
+        else str(task_result.status)
+    )
+    try:
+        doc_status = DocumentStatus(status_value)
+    except ValueError:
+        doc_status = DocumentStatus.PENDING
+    
     return ProcessingStatus(
         document_id=document_id,
-        status=status.status,
-        progress=status.progress,
-        message=status.message,
-        updated_at=status.updated_at
+        status=doc_status,
+        progress=getattr(task_result, "progress", 0) or 0,
+        message=getattr(task_result, "message", "") or "",
+        updated_at=getattr(task_result, "updated_at", datetime.utcnow())
     )
 
 # RAG Query Routes
@@ -234,4 +249,4 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         log_level="info"
-    )
+    )   
