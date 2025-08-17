@@ -1,49 +1,29 @@
 from dotenv import load_dotenv
 import os
+from Tools import TOOLS
 from document_engine import fetch_text_from_api
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated, Sequence
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, ToolMessage
 from operator import add as add_messages
 from langchain_openai import ChatOpenAI
-from langchain_openai import OpenAIEmbeddings
+#from langchain_core.tools import tool
+#from langchain_openai import OpenAIEmbeddings
 from langchain_core.tools import tool
 import requests
-from langchain_community.vectorstores import FAISS
+#from langchain_community.vectorstores import FAISS
+#import pandas as pd
+
 
 load_dotenv()
 
 url = "http://localhost:3000/data" # express api endpoint
 query = fetch_text_from_api(url)
 llm = ChatOpenAI(model="gpt-4o", temperature = 0) # I want to minimize hallucination - temperature = 0 makes the model output more deterministic 
-db = FAISS.load_local("faiss_index",OpenAIEmbeddings(),allow_dangerous_deserialization=True)
 
 
-# Now we create our retriever 
-retriever = db.as_retriever(
-    search_type="similarity",
-    search_kwargs={"k": 5} # K is the amount of chunks to return
-)
 
-@tool
-def retriever_tool(query: str) -> str:
-    """
-    This tool searches and returns the information from the Vector DB.
-    """
-
-    docs = retriever.invoke(query)
-
-    if not docs:
-        return "I found no relevant information in the db."
-    
-    results = []
-    for i, doc in enumerate(docs):
-        results.append(f"Document {i+1}:\n{doc.page_content}")
-    
-    return "\n\n".join(results)
-
-
-tools = [retriever_tool]
+tools = [TOOLS]
 
 llm = llm.bind_tools(tools)
 
@@ -100,10 +80,31 @@ def take_action(state: AgentState) -> AgentState:
     print("Tools Execution Complete. Back to the model!")
     return {'messages': results}
 
+# Analysis Agent
+def analysis_agent(state: AgentState) -> AgentState:
+    """Analyze tool results before passing back to LLM."""
+    messages = list(state['messages'])
+
+    # Last message is from the tool
+    tool_output = messages[-1].content
+
+    analysis_prompt = f"""
+    You are an expert analyst. The following is the retrieved data from a tool:
+    {tool_output}
+
+    Please analyze the data, summarize key points, and highlight any important patterns or insights.
+    """
+
+    analysis_message = llm.invoke([SystemMessage(content=analysis_prompt)])
+    return {'messages': [analysis_message]}
+
+
+
 
 graph = StateGraph(AgentState)
 graph.add_node("llm", call_llm)
 graph.add_node("retriever_agent", take_action)
+graph.add_node("analysis_agent",analysis_agent)
 
 graph.add_conditional_edges(
     "llm",
@@ -111,6 +112,7 @@ graph.add_conditional_edges(
     {True: "retriever_agent", False: END}
 )
 graph.add_edge("retriever_agent", "llm")
+graph.add_edge("retriever_agent","analysis_agent")
 graph.set_entry_point("llm")
 
 rag_agent = graph.compile()
