@@ -1,5 +1,5 @@
 
-# app/task_queue.py - Fixed Advanced Task Queue with Real-time Updates
+# app/task_queue_fixed.py - Fixed Advanced Task Queue with Real-time Updates
 import asyncio
 import json
 import uuid

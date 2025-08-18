@@ -1,5 +1,5 @@
 
-# backend/app/ai_integration.py - Fixed Bridge to AI Service
+# backend/app/ai_integration_fixed.py - Fixed Bridge to AI Service
 import os
 import sys
 import asyncio
