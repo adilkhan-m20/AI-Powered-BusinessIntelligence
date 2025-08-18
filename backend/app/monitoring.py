@@ -254,5 +254,21 @@ class MetricsCollector:
             "errors": dict(self.error_metrics),
         }
 
+    async def log_user_activity(self, user_id: int, activity_type: str, metadata: Optional[Dict] = None):
+        """Log user activity for analytics"""
+        activity_data = {
+            "user_id": user_id,
+            "activity_type": activity_type,
+            "timestamp": datetime.utcnow(),
+            "metadata": metadata or {}
+        }
+        
+        # Store in your preferred way (database, file, external service, etc.)
+        # For example, you might want to store this in a separate ActivityLog table
+        logger.info(f"User {user_id} activity: {activity_type}", extra=activity_data)
+        
+        # You could also increment metrics counters
+        # self.activity_counter.labels(user_id=user_id, activity_type=activity_type).inc()
+
 # Global metrics collector instance
 metrics_collector = MetricsCollector()
