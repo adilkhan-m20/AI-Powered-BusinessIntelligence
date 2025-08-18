@@ -78,7 +78,7 @@ class WebSocketManager:
         
         logger.info(f"🚪 User {user_id} disconnected from WebSocket")
     
-    async def send_to_user(self, user_id: int, message: Dict[str, Any]) -> bool:
+    async def send_to_user(self, user_id: int, message: Dict[str, Any]) -> int:
         """Send message to specific user"""
         if user_id not in self.active_connections:
             # User offline - queue message
