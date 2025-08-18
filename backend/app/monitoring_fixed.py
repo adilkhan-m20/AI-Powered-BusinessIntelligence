@@ -1,5 +1,5 @@
 
-# app/monitoring.py - Fixed Advanced Monitoring & Analytics System
+# app/monitoring_fixed.py - Fixed Advanced Monitoring & Analytics System
 import asyncio
 import json
 import time
@@ -101,12 +101,12 @@ class MetricsCollector:
     async def log_response(self, endpoint: str, status_code: int, response_time: float, user_id: Optional[int] = None):
         """Log API response"""
         # Update endpoint statistics
+        self.endpoint_stats = defaultdict(lambda: {"count": 0, "total_time": 0.0, "errors": 0})
         self.endpoint_stats[endpoint]["count"] += 1
-        self.endpoint_stats[endpoint]["total_time"] += response_time
+        self.endpoint_stats[endpoint]["total_time"] += float(response_time)
 
         if status_code >= 400:
             self.endpoint_stats[endpoint]["errors"] += 1
-            self.error_metrics[f"{status_code}_{endpoint}"] += 1
 
         # Store response time
         self.response_times[endpoint].append(response_time)

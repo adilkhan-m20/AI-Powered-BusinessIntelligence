@@ -1,18 +1,16 @@
 
-# backend/app/ai_integration.py - Fixed Bridge to AI Service
+# backend/app/ai_integration_fixed.py - Fixed Bridge to AI Service
 import os
 import sys
 import asyncio
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-# Resolve AI service path properly
-AI_SERVICE_PATH = Path(__file__).parent.parent.parent / "ai-service"
+AI_SERVICE_PATH = Path(__file__).parent.parent.parent / "ai_service"
 AI_SERVICE_PATH = AI_SERVICE_PATH.resolve()
 
-# Add to Python path if not already there
-if str(AI_SERVICE_PATH) not in sys.path:
-    sys.path.insert(0, str(AI_SERVICE_PATH))
+if str(AI_SERVICE_PATH.parent) not in sys.path:
+    sys.path.insert(0, str(AI_SERVICE_PATH.parent))
 
 class AIServiceIntegration:
     """Integration bridge to your existing AI service"""
@@ -66,7 +64,7 @@ class AIServiceIntegration:
             
             try:
                 # Import document processing function
-                from document_engine import process_document_pipeline
+                from ai_service.document_engine import process_document_pipeline
                 
                 # Process the document
                 result = process_document_pipeline(document_id, document_path)
@@ -118,7 +116,7 @@ class AIServiceIntegration:
             try:
                 # Import your existing RAG modules
                 from langchain_core.messages import HumanMessage
-                from RAG import rag_agent, retriever_tool
+                from ai_service.RAG import rag_agent, retriever_tool
                 
                 # Create the message for your RAG agent
                 messages = [HumanMessage(content=query)]
