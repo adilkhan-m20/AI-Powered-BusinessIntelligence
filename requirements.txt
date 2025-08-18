@@ -15,12 +15,11 @@ langchain-community==0.0.37
 langchain-core==0.1.45
 pypdf==3.17.4
 openpyxl==3.1.2
-unstructured==0.10.32
 sentence-transformers==2.2.2
-torch==2.1.2
 transformers==4.37.2
-accelerate==0.27.2
-bitsandbytes==0.41.3
 faiss-cpu==1.8.0
-python-magic==0.4.27
 tqdm==4.66.1
+unstructured==0.10.28
+pytesseract==0.3.10
+pdf2image==1.16.3
+Pillow==10.2.0
