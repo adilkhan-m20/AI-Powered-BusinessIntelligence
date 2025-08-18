@@ -1,14 +1,16 @@
 
+# RAG.py - Fixed RAG System
 from dotenv import load_dotenv
 import os
 import logging
 from typing import TypedDict, Annotated, Sequence
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, ToolMessage
 from operator import add as add_messages
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings.huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores.faiss import FAISS
 from langchain_core.tools import tool
 from langchain_community.llms import HuggingFaceHub
+from langchain.schema import Document
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +30,6 @@ except Exception as e:
     logger.warning(f"⚠️ Could not load FAISS database: {e}")
     logger.info("Creating empty FAISS database...")
     # Create a dummy document to initialize FAISS
-    from langchain.schema import Document
     dummy_doc = Document(page_content="Initial document for FAISS initialization")
     embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
     db = FAISS.from_documents([dummy_doc], embeddings)
@@ -69,8 +70,23 @@ class AgentState(TypedDict):
 def should_continue(state: AgentState) -> bool:
     """Check if the last message contains tool calls."""
     try:
-        result = state['messages'][-1]
-        return isinstance(result, HumanMessage) and hasattr(result, 'tool_calls') and bool(result.tool_calls)
+        messages = state['messages']
+        if not messages:
+            return False
+            
+        # Check if the last message has tool calls
+        last_message = messages[-1]
+        
+        # For HumanMessage, check if it has tool_calls attribute
+        if hasattr(last_message, 'tool_calls'):
+            return bool(getattr(last_message, 'tool_calls', None))
+            
+        # Alternative check for tool calls in the message content
+        if hasattr(last_message, 'content'):
+            content = getattr(last_message, 'content', '')
+            return "tool_calls" in str(content).lower()
+            
+        return False
     except (IndexError, KeyError):
         return False
 
@@ -82,18 +98,41 @@ Please always cite the specific parts of the documents you use in your answers.
 """
 
 # LLM setup - using Hugging Face instead of OpenAI for local deployment
-llm = HuggingFaceHub(
-    repo_id="mistralai/Mistral-7B-Instruct-v0.2",
-    model_kwargs={"temperature": 0.5, "max_length": 512}
-)
+try:
+    llm = HuggingFaceHub(
+        repo_id="mistralai/Mistral-7B-Instruct-v0.2",
+        model_kwargs={"temperature": 0.5, "max_length": 512}
+    )
+except Exception as e:
+    logger.warning(f"Could not load Mistral model: {e}")
+    logger.info("Using a simpler local model instead...")
+    # Fallback to a smaller, more reliable model
+    llm = HuggingFaceHub(
+        repo_id="google/flan-t5-small",
+        model_kwargs={"temperature": 0.5, "max_length": 512}
+    )
 
 def call_llm(state: AgentState) -> AgentState:
     """Function to call the LLM with the current state."""
     try:
         messages = list(state['messages'])
         messages = [SystemMessage(content=system_prompt)] + messages
-        message = llm.invoke(messages)
-        return {'messages': [message]}
+        
+        # Convert messages to a simple string prompt for the LLM
+        prompt = ""
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                prompt += f"Human: {msg.content}\n"
+            elif isinstance(msg, SystemMessage):
+                prompt += f"System: {msg.content}\n"
+            elif isinstance(msg, ToolMessage):
+                prompt += f"Tool Response: {msg.content}\n"
+        
+        # Add instruction for the LLM
+        prompt += "Assistant:"
+        
+        response = llm.invoke(prompt)
+        return {'messages': [HumanMessage(content=response)]}
     except Exception as e:
         logger.error(f"Error processing request: {e}")
         error_message = HumanMessage(content=f"Error processing request: {str(e)}")
@@ -102,32 +141,36 @@ def call_llm(state: AgentState) -> AgentState:
 def take_action(state: AgentState) -> AgentState:
     """Execute tool calls from the LLM's response."""
     try:
-        last_message = state['messages'][-1]
-
-        if not isinstance(last_message, HumanMessage):
-            raise TypeError("Expected HumanMessage as the last message.")
-
-        tool_calls = getattr(last_message, "tool_calls", [])
-
-        if not tool_calls:
-            raise ValueError("No tool calls found in the last HumanMessage.")
-        
-        results = []
-        for t in tool_calls:
-            logger.info(f"Calling Tool: {t['name']} with query: {t['args'].get('query', 'No query provided')}")
+        messages = state['messages']
+        if not messages:
+            return state
             
-            if t['name'] not in tools_dict:
-                logger.warning(f"\nTool: {t['name']} does not exist.")
-                result = "Incorrect Tool Name, Please Retry and Select tool from List of Available tools."
-            else:
-                result = tools_dict[t['name']].invoke(t['args'].get('query', ''))
-                logger.info(f"Result length: {len(str(result))}")
-
-            # Appends the Tool Message
-            results.append(ToolMessage(tool_call_id=t['id'], name=t['name'], content=str(result)))
-
-        logger.info("Tools Execution Complete. Back to the model!")
-        return {'messages': results}
+        last_message = messages[-1]
+        
+        # Since we can't reliably access tool_calls, let's use a simpler approach
+        # We'll check if the message content indicates a tool should be called
+        if hasattr(last_message, 'content'):
+            content = getattr(last_message, 'content', '').lower()
+            
+            # Look for keywords that might indicate a search is needed
+            search_keywords = ['search', 'find', 'look up', 'information about', 'what is', 'who is', 'where is']
+            if any(keyword in content for keyword in search_keywords):
+                # Extract query from the message
+                query = content
+                
+                # Call the retriever tool
+                result = retriever_tool.invoke(query)
+                
+                # Return tool message
+                tool_msg = ToolMessage(
+                    tool_call_id="search_1", 
+                    name="retriever_tool", 
+                    content=str(result)
+                )
+                return {'messages': [tool_msg]}
+        
+        # If no tool call is needed, return empty result
+        return {'messages': []}
     
     except Exception as e:
         logger.error(f"Error executing tools: {e}")
@@ -147,14 +190,11 @@ def running_agent():
             if user_input.lower() in ['exit', 'quit']:
                 break
                 
-            messages = [HumanMessage(content=user_input)]
-            # For demonstration, we'll use a simple flow without state graph
-            # In production, you'd use the StateGraph approach
-            
-            # First, get relevant documents
+            # Simple RAG flow without complex state management
+            # 1. Get relevant documents
             retrieved = retriever_tool.invoke(user_input)
             
-            # Then, generate response with context
+            # 2. Generate response with context
             prompt = f"""
             Use the following context to answer the question:
             
@@ -168,8 +208,12 @@ def running_agent():
             print("\n=== ANSWER ===")
             print(response)
             
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
         except Exception as e:
             logger.error(f"Error processing query: {e}")
+            print(f"Sorry, I encountered an error: {e}")
             continue
 
 if __name__ == "__main__":
