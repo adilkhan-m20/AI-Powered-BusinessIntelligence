@@ -159,7 +159,8 @@ class TaskQueue:
         progress: int, 
         message: str,
         result: Optional[Dict[str, Any]] = None,
-        processing_time: Optional[float] = None
+        processing_time: Optional[float] = None,
+        task_info: Optional[Dict[str, Any]] = None
     ):
         """Update task status and notify clients"""
         
@@ -188,7 +189,7 @@ class TaskQueue:
         self.task_storage[task_id] = task_result
         
         # Send real-time update
-        user_id = task_info.get("user_id") if 'task_info' in locals() else None
+        user_id = task_info.get("user_id") if task_info else None
         if user_id:
             from .websocket_manager import websocket_manager
             await websocket_manager.send_to_user(
