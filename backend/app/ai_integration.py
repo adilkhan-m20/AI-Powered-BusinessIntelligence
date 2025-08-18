@@ -1,10 +1,15 @@
 
-# backend/app/ai_integration_fixed.py - Fixed Bridge to AI Service
+# backend/app/ai_integration.py - Fixed Bridge to AI Service
 import os
 import sys
 import asyncio
+import logging
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 AI_SERVICE_PATH = Path(__file__).parent.parent.parent / "ai_service"
 AI_SERVICE_PATH = AI_SERVICE_PATH.resolve()
@@ -35,6 +40,7 @@ class AIServiceIntegration:
             }
             
         except Exception as e:
+            logger.error(f"AI processing failed: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -52,6 +58,7 @@ class AIServiceIntegration:
             return result
             
         except Exception as e:
+            logger.error(f"Document processing failed: {e}")
             raise Exception(f"AI processing failed: {str(e)}")
     
     def _process_document_sync(self, document_path: str, document_id: int) -> Dict[str, Any]:
@@ -64,7 +71,7 @@ class AIServiceIntegration:
             
             try:
                 # Import document processing function
-                from ai_service.document_engine import process_document_pipeline
+                from document_engine import process_document_pipeline
                 
                 # Process the document
                 result = process_document_pipeline(document_id, document_path)
@@ -80,8 +87,10 @@ class AIServiceIntegration:
                 os.chdir(original_cwd)
                 
         except ImportError as e:
+            logger.error(f"Failed to import AI modules: {e}")
             raise Exception(f"Failed to import AI modules: {str(e)}")
         except Exception as e:
+            logger.error(f"Document processing failed: {e}")
             raise Exception(f"Document processing failed: {str(e)}")
     
     async def query_rag_system(self, query: str, user_id: int, filters: Optional[Dict] = None) -> Dict[str, Any]:
@@ -100,6 +109,7 @@ class AIServiceIntegration:
             }
             
         except Exception as e:
+            logger.error(f"RAG query failed: {e}")
             return {
                 "success": False,
                 "error": str(e)
@@ -116,24 +126,34 @@ class AIServiceIntegration:
             try:
                 # Import your existing RAG modules
                 from langchain_core.messages import HumanMessage
-                from ai_service.RAG import rag_agent, retriever_tool
+                from RAG import retriever_tool, llm
                 
                 # Create the message for your RAG agent
                 messages = [HumanMessage(content=query)]
                 
-                # Invoke your existing RAG agent
-                result = rag_agent.invoke({"messages": messages})
+                # Process query with context
+                # First, get relevant documents
+                retrieved = retriever_tool.invoke(query)
                 
-                # Extract the response
-                response_content = result['messages'][-1].content if result['messages'] else "No response generated"
+                # Then, generate response with context
+                prompt = f"""
+                Use the following context to answer the question:
+                
+                {retrieved}
+                
+                Question: {query}
+                Answer:
+                """
+                
+                # Invoke the LLM
+                response = llm.invoke(prompt)
                 
                 # Try to extract sources using your retriever tool directly
                 sources_info = []
                 try:
-                    retriever_result = retriever_tool.invoke(query)
-                    if retriever_result and "Document" in retriever_result:
+                    if "Document 1" in retrieved:
                         # Parse the retriever result to extract sources
-                        source_docs = retriever_result.split("Document ")
+                        source_docs = retrieved.split("Document ")
                         for i, doc in enumerate(source_docs[1:], 1):  # Skip first empty element
                             if doc.strip():
                                 # Clean up the document text
@@ -146,19 +166,20 @@ class AIServiceIntegration:
                                     "relevance_score": max(0.1, 0.9 - (i * 0.1))  # Decreasing relevance
                                 })
                 except Exception as source_error:
-                    print(f"Error extracting sources: {source_error}")
+                    logger.warning(f"Error extracting sources: {source_error}")
                 
                 return {
-                    "response": response_content,
+                    "response": response,
                     "sources": sources_info,
                     "confidence": min(0.95, 0.7 + (len(sources_info) * 0.05)),  # Dynamic confidence
-                    "tool_calls": len([msg for msg in result.get('messages', []) if hasattr(msg, 'tool_calls')])
+                    "tool_calls": 1
                 }
                 
             finally:
                 os.chdir(original_cwd)
             
         except Exception as e:
+            logger.error(f"RAG query failed: {e}")
             raise Exception(f"RAG query failed: {str(e)}")
     
     async def validate_document_quality(self, document_path: str) -> Dict[str, Any]:
@@ -227,6 +248,7 @@ class AIServiceIntegration:
             }
             
         except Exception as e:
+            logger.error(f"Document validation failed: {e}")
             return {
                 "is_valid": False,
                 "quality_score": 0.0,
@@ -255,7 +277,7 @@ class AIServiceIntegration:
                 return TextLoader(document_path, encoding='utf-8')
                 
         except Exception as e:
-            print(f"Error creating document loader: {e}")
+            logger.error(f"Error creating document loader: {e}")
             return None
     
     async def get_rag_agent_stats(self) -> Dict[str, Any]:
@@ -266,18 +288,19 @@ class AIServiceIntegration:
             os.chdir(str(self.ai_service_path))
             
             try:
-                from langchain_openai import OpenAIEmbeddings
+                from langchain_community.embeddings import HuggingFaceEmbeddings
                 from langchain_community.vectorstores import FAISS
                 
                 # Load FAISS database to get stats
                 if os.path.exists("faiss_index"):
-                    db = FAISS.load_local("faiss_index", OpenAIEmbeddings(), allow_dangerous_deserialization=True)
+                    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+                    db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
                     
                     return {
                         "faiss_index_exists": True,
                         "estimated_chunks": "Available",
                         "index_path": "faiss_index",
-                        "embedding_model": "text-embedding-ada-002"
+                        "embedding_model": "all-MiniLM-L6-v2"
                     }
                 else:
                     return {
@@ -291,6 +314,7 @@ class AIServiceIntegration:
                 os.chdir(original_cwd)
                 
         except Exception as e:
+            logger.error(f"RAG stats retrieval failed: {e}")
             return {
                 "faiss_index_exists": False,
                 "error": str(e),
