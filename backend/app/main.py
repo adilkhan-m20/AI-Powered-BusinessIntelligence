@@ -20,7 +20,7 @@ from .database import get_db, create_tables, check_database_health
 from .auth import get_current_user, create_access_token, authenticate_user, get_current_admin_user
 from .models import *
 from .services import *
-from .websocket_manager import websocket_manager
+from .websocket_manager import websocket_manager, WebSocketManager
 from .task_queue import task_queue
 from .monitoring import metrics_collector
 
