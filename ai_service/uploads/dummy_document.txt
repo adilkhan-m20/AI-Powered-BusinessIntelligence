@@ -1,0 +1,3 @@
+This is a sample document to initialize the FAISS database.
+    The system uses this to create the initial vector store structure.
+    This document will be used to test the document processing pipeline.
