@@ -117,7 +117,10 @@ class TaskQueue:
         
         try:
             # Update task status to processing
-            await self._update_task_status(task_id, TaskStatus.PROCESSING, 0, f"Processing with {worker_name}")
+            await self._update_task_status(
+            task_id, TaskStatus.PROCESSING, 0, f"Processing with {worker_name}", 
+            task_info=task_info  # Pass task_info
+        )
             
             # Get the processor
             processor = self.task_processors.get(task_type)
@@ -138,7 +141,8 @@ class TaskQueue:
                 100, 
                 "Task completed successfully",
                 result,
-                processing_time=processing_time
+                processing_time=processing_time,
+                task_info=task_info
             )
             
         except Exception as e:
@@ -149,7 +153,8 @@ class TaskQueue:
                 task_id, 
                 TaskStatus.FAILED, 
                 0, 
-                f"Task failed: {str(e)}"
+                f"Task failed: {str(e)}",
+                task_info=task_info
             )
     
     async def _update_task_status(
