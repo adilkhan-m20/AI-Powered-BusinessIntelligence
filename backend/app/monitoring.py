@@ -269,6 +269,41 @@ class MetricsCollector:
         
         # You could also increment metrics counters
         # self.activity_counter.labels(user_id=user_id, activity_type=activity_type).inc()
+        
+    async def _cleanup_old_metrics(self):
+        """Background task to cleanup old metrics data"""
+        while True:
+            try:
+                current_time = time.time()
+                cutoff_time = current_time - 86400  # 24 hours ago
+                
+                # Clean up old user activity (keep only last 24 hours)
+                for user_id in list(self.user_activity.keys()):
+                    self.user_activity[user_id] = [
+                        timestamp for timestamp in self.user_activity[user_id] 
+                        if timestamp > cutoff_time
+                    ]
+                    
+                    # Remove empty entries
+                    if not self.user_activity[user_id]:
+                        del self.user_activity[user_id]
+                
+                # Clean up old response times (keep only last 1000 per endpoint)
+                for endpoint in self.response_times:
+                    if len(self.response_times[endpoint]) > 1000:
+                        self.response_times[endpoint] = self.response_times[endpoint][-1000:]
+                
+                # Reset daily error counts if needed
+                # (You might want to persist these before resetting)
+                
+                logger.info("🧹 Cleaned up old metrics data")
+                
+                # Run cleanup every hour
+                await asyncio.sleep(3600)
+                
+            except Exception as e:
+                logger.error(f"Error during metrics cleanup: {e}")
+                await asyncio.sleep(3600)
 
 # Global metrics collector instance
 metrics_collector = MetricsCollector()
