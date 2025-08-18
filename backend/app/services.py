@@ -1,14 +1,12 @@
 
-# backend/app/services_fixed.py - Fixed Business Logic Services
+# backend/app/services.py - Fixed Business Logic Services
 import os
 import uuid
-import json
 import aiofiles
 from typing import List, Dict, Any, Optional, Sequence
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import text
 from fastapi import UploadFile, HTTPException
 
 from .models import Document, User, DocumentChunk, Query
@@ -179,7 +177,8 @@ class UserRAGSystem:
         """Process RAG query"""
         
         # Use the AI integration bridge
-        result = await ai_service.query_rag_system(query, self.user_id, filters)
+        from .ai_integration import query_rag_with_ai
+        result = await query_rag_with_ai(query, self.user_id, filters)
         
         if not result["success"]:
             raise HTTPException(status_code=500, detail=result["error"])
@@ -259,27 +258,6 @@ class AnalyticsService:
             "total_chunks": sum(d.chunk_count for d in documents),
             "storage_used_mb": sum(d.file_size for d in documents) / (1024 * 1024)
         }
-
-# Health check services
-async def check_ai_models_health() -> bool:
-    """Check AI models health"""
-    try:
-        # Test basic AI service connectivity
-        test_result = await ai_service.validate_document_quality("dummy_path")
-        return test_result.get("is_valid") is not None
-    except Exception as e:
-        print(f"AI health check failed: {e}")
-        return False
-    
-async def check_database_health() -> bool:
-    """Check if the database connection is alive."""
-    try:
-        async with AsyncSession(engine) as session:
-            await session.execute(text("SELECT 1"))
-        return True
-    except Exception as e:
-        print(f"Database health check failed: {e}")
-        return False
 
 # Convenience functions for main.py
 async def create_document_record(db, file, user_id):

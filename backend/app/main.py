@@ -1,23 +1,28 @@
 
-# app/main_fixed.py - Fixed Main FastAPI Application
+# app/main.py - Fixed Main FastAPI Application
 import os
 import asyncio
 from contextlib import asynccontextmanager
 from typing import List, Optional
-import uvicorn
+import json
+import logging
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .database import get_db, create_tables
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+from .database import get_db, create_tables, check_database_health
 from .auth import get_current_user, create_access_token, authenticate_user, get_current_admin_user
 from .models import *
-from .services_fixed import *
-from .websocket_manager import WebSocketManager
-from .task_queue_fixed import task_queue
-from app.monitoring import metrics_collector
+from .services import *
+from .websocket_manager import websocket_manager
+from .task_queue import task_queue
+from .monitoring import metrics_collector
 
 # Global managers
 websocket_manager = WebSocketManager()
@@ -27,13 +32,13 @@ async def lifespan(app: FastAPI):
     """Application lifespan events"""
     # Startup
     try:
-        print("🚀 Starting MultiModal AI Backend...")
+        logger.info("🚀 Starting MultiModal AI Backend...")
         await create_tables()
         await task_queue.initialize()
         await metrics_collector.initialize()
-        print("✅ MultiModal AI Backend Started Successfully!")
+        logger.info("✅ MultiModal AI Backend Started Successfully!")
     except Exception as e:
-        print(f"❌ Startup failed: {e}")
+        logger.error(f"❌ Startup failed: {e}")
         raise
     
     yield
@@ -42,12 +47,12 @@ async def lifespan(app: FastAPI):
     try:
         await task_queue.cleanup()
         await metrics_collector.cleanup()
-        print("👋 Backend Shutdown Complete")
+        logger.info("👋 Backend Shutdown Complete")
     except Exception as e:
-        print(f"⚠️ Shutdown error: {e}")
+        logger.error(f"⚠️ Shutdown error: {e}")
 
 app = FastAPI(
-    title="MultiModal AI Document Processing API",
+    title="EchoWeave - MultiModal AI",
     description="Enterprise-grade backend for intelligent document processing with RAG",
     version="1.0.0",
     lifespan=lifespan
@@ -66,11 +71,11 @@ app.add_middleware(
 try:
     if os.path.exists("static"):
         app.mount("/static", StaticFiles(directory="static"), name="static")
-        print("✅ Static files mounted")
+        logger.info("✅ Static files mounted")
     else:
-        print("⚠️ Static directory not found")
+        logger.warning("⚠️ Static directory not found")
 except Exception as e:
-    print(f"⚠️ Could not mount static files: {e}")
+    logger.error(f"⚠️ Could not mount static files: {e}")
 
 # Root route
 @app.get("/", response_class=HTMLResponse)
@@ -79,10 +84,10 @@ async def read_root():
     return """
     <html>
         <head>
-            <title>MultiModal AI Backend</title>
+            <title>EchoWeave - MultiModal AI</title>
         </head>
         <body>
-            <h1>🧠 MultiModal AI Backend</h1>
+            <h1>🧠 EchoWeave - MultiModal AI</h1>
             <p>Enterprise-grade document processing with RAG</p>
             <ul>
                 <li><a href="/docs">📖 API Documentation</a></li>
@@ -140,6 +145,7 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"User registration failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Document Management Routes
@@ -254,7 +260,7 @@ async def delete_document(
         if os.path.exists(document.file_path):
             os.remove(document.file_path)
     except Exception as e:
-        print(f"Warning: Could not delete file {document.file_path}: {e}")
+        logger.warning(f"Warning: Could not delete file {document.file_path}: {e}")
     
     # Delete from database
     await db.delete(document)
@@ -300,6 +306,7 @@ async def query_documents(
     except Exception as e:
         processing_time = metrics_collector.get_timestamp() - start_time
         await metrics_collector.log_query(user.id, query_request.query, processing_time)
+        logger.error(f"Query processing failed: {e}")
         raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
 
 # WebSocket for Real-time Updates
@@ -332,7 +339,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
     except WebSocketDisconnect:
         await websocket_manager.disconnect(user_id, websocket)
     except Exception as e:
-        print(f"WebSocket error for user {user_id}: {e}")
+        logger.error(f"WebSocket error for user {user_id}: {e}")
         await websocket_manager.disconnect(user_id, websocket)
 
 # Analytics and Monitoring Routes
@@ -345,6 +352,7 @@ async def get_dashboard_metrics(
     try:
         return await metrics_collector.get_user_dashboard(user.id)
     except Exception as e:
+        logger.error(f"Failed to get dashboard metrics: {e}")
         # Fallback to basic stats
         stats = await AnalyticsService.get_user_stats(db, user.id)
         return DashboardMetrics(
@@ -367,6 +375,7 @@ async def get_usage_metrics(
     try:
         return await metrics_collector.get_usage_metrics(user.id, days)
     except Exception as e:
+        logger.error(f"Failed to get usage metrics: {e}")
         return UsageMetrics(
             period_days=days,
             total_activity=0,
@@ -386,6 +395,7 @@ async def get_system_metrics(
     try:
         return await metrics_collector.get_system_metrics()
     except Exception as e:
+        logger.error(f"Failed to get system metrics: {e}")
         raise HTTPException(status_code=500, detail=f"Could not retrieve system metrics: {str(e)}")
 
 @app.get("/admin/queue-stats")
@@ -400,17 +410,19 @@ async def get_queue_stats(
 async def get_version():
     """Get API version information"""
     return {
-        "name": "MultiModal AI Backend",
+        "name": "EchoWeave - MultiModal AI",
         "version": "1.0.0",
         "python_version": "3.8+",
         "fastapi_version": "0.104.1"
     }
 
-if __name__ == "__main__":
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+async def check_ai_models_health() -> bool:
+    """Check AI models health"""
+    try:
+        # Test basic AI service connectivity
+        from .ai_integration import validate_document_with_ai
+        test_result = await validate_document_with_ai("dummy_path")
+        return test_result.get("is_valid") is not None
+    except Exception as e:
+        logger.error(f"AI health check failed: {e}")
+        return False
