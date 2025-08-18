@@ -1,26 +1,17 @@
 
-# app/task_queue_fixed.py - Fixed Advanced Task Queue with Real-time Updates
+# app/task_queue.py - Fixed Advanced Task Queue with Real-time Updates
 import asyncio
 import json
 import uuid
+import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from enum import Enum
 from pydantic import BaseModel
-import logging
 
-from .websocket_manager import websocket_manager
-from .monitoring import metrics_collector
-
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Redis handling with fallback
-try:
-    import redis.asyncio as aioredis
-    REDIS_AVAILABLE = True
-except ImportError:
-    print("⚠️ Redis not available for task queue")
-    REDIS_AVAILABLE = False
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
@@ -43,38 +34,22 @@ class TaskResult(BaseModel):
 class TaskQueue:
     """Advanced async task queue with real-time updates and monitoring"""
     
-    def __init__(self, redis_url: str = "redis://localhost:6379"):
-        self.redis_url = redis_url
-        self.redis: Optional[Any] = None
+    def __init__(self):
         self.workers: Dict[str, asyncio.Task] = {}
         self.task_processors = {}
         self._shutdown = False
-        self.redis_available = REDIS_AVAILABLE
-        
-        # In-memory fallback storage
         self.task_storage: Dict[str, TaskResult] = {}
         self.task_queue_storage: List[Dict[str, Any]] = []
         
     async def initialize(self):
-        """Initialize Redis connection and start workers"""
-        if self.redis_available:
-            try:
-                self.redis = aioredis.from_url(self.redis_url, decode_responses=True)
-                await self.redis.ping()
-                print("✅ Redis connection established for task queue")
-            except Exception as e:
-                print(f"⚠️ Redis connection failed: {e}. Using in-memory storage.")
-                self.redis = None
-        else:
-            print("⚠️ Redis not available, using in-memory task storage")
-        
+        """Initialize task queue and start workers"""
         # Register task processors
         self._register_processors()
         
         # Start worker processes
         await self._start_workers()
         
-        logger.info("Task Queue initialized successfully")
+        logger.info("✅ Task Queue initialized successfully")
     
     async def cleanup(self):
         """Cleanup resources"""
@@ -87,13 +62,7 @@ class TaskQueue:
         # Wait for workers to finish
         await asyncio.gather(*self.workers.values(), return_exceptions=True)
         
-        if self.redis:
-            try:
-                await self.redis.close()
-            except Exception as e:
-                print(f"Error closing Redis connection: {e}")
-        
-        logger.info("Task Queue cleanup completed")
+        logger.info("🧹 Task Queue cleanup completed")
     
     def _register_processors(self):
         """Register all task processors"""
@@ -113,28 +82,21 @@ class TaskQueue:
                 self._worker_loop(worker_name)
             )
         
-        logger.info(f"Started {num_workers} worker processes")
+        logger.info(f"👷 Started {num_workers} worker processes")
     
     async def _worker_loop(self, worker_name: str):
         """Main worker loop"""
-        logger.info(f"Worker {worker_name} started")
+        logger.info(f"🧵 Worker {worker_name} started")
         
         while not self._shutdown:
             try:
                 task_info = None
                 
-                if self.redis:
-                    # Redis-based queue
-                    task_data = await self.redis.brpop("task_queue", timeout=5)
-                    if task_data:
-                        queue_name, task_json = task_data
-                        task_info = json.loads(task_json)
+                # In-memory queue
+                if self.task_queue_storage:
+                    task_info = self.task_queue_storage.pop(0)
                 else:
-                    # In-memory queue
-                    if self.task_queue_storage:
-                        task_info = self.task_queue_storage.pop(0)
-                    else:
-                        await asyncio.sleep(1)  # Wait for tasks
+                    await asyncio.sleep(1)  # Wait for tasks
                 
                 if task_info:
                     # Process the task
@@ -146,7 +108,7 @@ class TaskQueue:
                 logger.error(f"Worker {worker_name} error: {e}")
                 await asyncio.sleep(1)
         
-        logger.info(f"Worker {worker_name} stopped")
+        logger.info(f"🛑 Worker {worker_name} stopped")
     
     async def _process_task(self, task_info: Dict[str, Any], worker_name: str):
         """Process a single task"""
@@ -179,9 +141,6 @@ class TaskQueue:
                 processing_time=processing_time
             )
             
-            # Log metrics
-            await metrics_collector.log_task_completion(task_type, processing_time, success=True)
-            
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
             
@@ -192,9 +151,6 @@ class TaskQueue:
                 0, 
                 f"Task failed: {str(e)}"
             )
-            
-            # Log metrics
-            await metrics_collector.log_task_completion(task_type, 0, success=False)
     
     async def _update_task_status(
         self, 
@@ -208,35 +164,14 @@ class TaskQueue:
         """Update task status and notify clients"""
         
         # Get or create task result
-        if self.redis:
-            try:
-                current_data = await self.redis.get(f"task:{task_id}")
-                if current_data:
-                    task_result = TaskResult.parse_raw(current_data)
-                else:
-                    task_result = TaskResult(
-                        task_id=task_id,
-                        status=status,
-                        created_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow()
-                    )
-            except Exception:
-                task_result = TaskResult(
-                    task_id=task_id,
-                    status=status,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
-                )
-        else:
-            # In-memory storage
-            task_result = self.task_storage.get(task_id)
-            if not task_result:
-                task_result = TaskResult(
-                    task_id=task_id,
-                    status=status,
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow()
-                )
+        task_result = self.task_storage.get(task_id)
+        if not task_result:
+            task_result = TaskResult(
+                task_id=task_id,
+                status=status,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
         
         # Update fields
         task_result.status = status
@@ -250,31 +185,12 @@ class TaskQueue:
             task_result.processing_time = processing_time
         
         # Store updated task
-        if self.redis:
-            try:
-                await self.redis.set(
-                    f"task:{task_id}", 
-                    task_result.json(),
-                    ex=86400  # 24 hours expiry
-                )
-            except Exception as e:
-                print(f"Error storing task in Redis: {e}")
-                # Fallback to in-memory
-                self.task_storage[task_id] = task_result
-        else:
-            self.task_storage[task_id] = task_result
+        self.task_storage[task_id] = task_result
         
         # Send real-time update
-        if self.redis:
-            try:
-                user_id = await self.redis.get(f"task_user:{task_id}")
-            except Exception:
-                user_id = None
-        else:
-            # For in-memory, we'd need to store user mapping differently
-            user_id = None
-        
+        user_id = task_info.get("user_id") if 'task_info' in locals() else None
         if user_id:
+            from .websocket_manager import websocket_manager
             await websocket_manager.send_to_user(
                 int(user_id),
                 {
@@ -416,23 +332,8 @@ class TaskQueue:
             "created_at": datetime.utcnow().isoformat()
         }
         
-        # Store task-user mapping
-        if self.redis:
-            try:
-                await self.redis.set(f"task_user:{task_id}", user_id, ex=86400)
-            except Exception as e:
-                print(f"Error storing task-user mapping: {e}")
-        
         # Add to queue
-        if self.redis:
-            try:
-                await self.redis.lpush("task_queue", json.dumps(task_info))
-            except Exception as e:
-                print(f"Error adding task to Redis queue: {e}")
-                # Fallback to in-memory
-                self.task_queue_storage.append(task_info)
-        else:
-            self.task_queue_storage.append(task_info)
+        self.task_queue_storage.append(task_info)
         
         # Initialize task status
         await self._update_task_status(task_id, TaskStatus.PENDING, 0, "Task queued")
@@ -451,15 +352,7 @@ class TaskQueue:
             "created_at": datetime.utcnow().isoformat()
         }
         
-        if self.redis:
-            try:
-                await self.redis.set(f"task_user:{task_id}", user_id, ex=86400)
-                await self.redis.lpush("task_queue", json.dumps(task_info))
-            except Exception as e:
-                print(f"Error enqueuing batch task: {e}")
-                self.task_queue_storage.append(task_info)
-        else:
-            self.task_queue_storage.append(task_info)
+        self.task_queue_storage.append(task_info)
             
         await self._update_task_status(task_id, TaskStatus.PENDING, 0, "Batch processing queued")
         
@@ -467,15 +360,6 @@ class TaskQueue:
     
     async def get_task_status(self, task_id: str) -> Optional[TaskResult]:
         """Get task status"""
-        if self.redis:
-            try:
-                task_data = await self.redis.get(f"task:{task_id}")
-                if task_data:
-                    return TaskResult.parse_raw(task_data)
-            except Exception as e:
-                print(f"Error getting task status from Redis: {e}")
-        
-        # Fallback to in-memory
         return self.task_storage.get(task_id)
     
     async def cancel_task(self, task_id: str) -> bool:
@@ -486,32 +370,17 @@ class TaskQueue:
     
     async def get_queue_stats(self) -> Dict[str, Any]:
         """Get queue statistics"""
-        if self.redis:
-            try:
-                pending_tasks = await self.redis.llen("task_queue")
-            except Exception:
-                pending_tasks = len(self.task_queue_storage)
-        else:
-            pending_tasks = len(self.task_queue_storage)
-        
         return {
-            "pending_tasks": pending_tasks,
+            "pending_tasks": len(self.task_queue_storage),
             "active_workers": len(self.workers),
             "task_types": list(self.task_processors.keys()),
-            "storage_backend": "redis" if self.redis else "memory"
+            "storage_backend": "memory"
         }
     
     async def health_check(self) -> bool:
         """Check if task queue is healthy"""
-        if self.redis:
-            try:
-                await self.redis.ping()
-                return True
-            except Exception:
-                return False
-        else:
-            # Memory backend is always healthy if workers are running
-            return len(self.workers) > 0
+        # Memory backend is always healthy if workers are running
+        return len(self.workers) > 0
     
     # Helper methods
     async def _build_user_index(self, user_id: int, document_ids: List[int]) -> Dict[str, Any]:
