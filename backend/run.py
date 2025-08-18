@@ -4,6 +4,11 @@ import os
 import asyncio
 import uvicorn
 from dotenv import load_dotenv
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -16,11 +21,11 @@ def main():
     port = int(os.getenv("PORT", 8000))
     debug = os.getenv("DEBUG", "false").lower() == "true"
     
-    print("🚀 Starting MultiModal AI Backend...")
-    print(f"📡 Server: http://{host}:{port}")
-    print(f"📖 API Docs: http://{host}:{port}/docs")
-    print(f"🔄 Interactive Docs: http://{host}:{port}/redoc")
-    print(f"🔧 Debug Mode: {debug}")
+    logger.info("🚀 Starting MultiModal AI Backend...")
+    logger.info(f"📡 Server: http://{host}:{port}")
+    logger.info(f"📖 API Docs: http://{host}:{port}/docs")
+    logger.info(f"🔄 Interactive Docs: http://{host}:{port}/redoc")
+    logger.info(f"🔧 Debug Mode: {debug}")
     
     # Start the server
     uvicorn.run(

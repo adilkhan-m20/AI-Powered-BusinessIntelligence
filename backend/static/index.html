@@ -4,23 +4,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MultiModal AI - Dashboard</title>
+    <title>EchoWeave - MultiModal AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .progress-bar {
+            transition: width 0.3s ease;
+        }
+        .notification-enter {
+            opacity: 0;
+            transform: translateY(-20px);
+        }
+        .notification-enter-active {
+            opacity: 1;
+            transform: translateY(0);
+            transition: all 0.3s ease;
+        }
+        .notification-exit {
+            opacity: 1;
+        }
+        .notification-exit-active {
+            opacity: 0;
+            transform: translateY(-20px);
+            transition: all 0.3s ease;
+        }
+    </style>
 </head>
-<body class="bg-gray-50" x-data="dashboardApp()">
+<body class="bg-gray-50">
     <!-- Navigation -->
     <nav class="bg-white shadow-lg">
         <div class="max-w-7xl mx-auto px-4">
             <div class="flex justify-between h-16">
                 <div class="flex items-center">
                     <i class="fas fa-brain text-2xl text-blue-600 mr-3"></i>
-                    <span class="font-bold text-xl text-gray-800">MultiModal AI</span>
+                    <span class="font-bold text-xl text-gray-800">EchoWeave</span>
                 </div>
                 <div class="flex items-center space-x-4">
-                    <span x-text="user.username" class="text-gray-600"></span>
-                    <button @click="logout()" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">
+                    <span id="username" class="text-gray-600">Demo User</span>
+                    <button id="logoutBtn" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">
                         <i class="fas fa-sign-out-alt mr-2"></i>Logout
                     </button>
                 </div>
@@ -39,7 +60,7 @@
                     </div>
                     <div class="ml-4">
                         <p class="text-sm text-gray-600">Total Documents</p>
-                        <p class="text-2xl font-bold text-gray-900" x-text="stats.totalDocuments">0</p>
+                        <p class="text-2xl font-bold text-gray-900" id="totalDocuments">0</p>
                     </div>
                 </div>
             </div>
@@ -51,7 +72,7 @@
                     </div>
                     <div class="ml-4">
                         <p class="text-sm text-gray-600">Processed</p>
-                        <p class="text-2xl font-bold text-gray-900" x-text="stats.processedDocuments">0</p>
+                        <p class="text-2xl font-bold text-gray-900" id="processedDocuments">0</p>
                     </div>
                 </div>
             </div>
@@ -63,7 +84,7 @@
                     </div>
                     <div class="ml-4">
                         <p class="text-sm text-gray-600">Total Queries</p>
-                        <p class="text-2xl font-bold text-gray-900" x-text="stats.totalQueries">0</p>
+                        <p class="text-2xl font-bold text-gray-900" id="totalQueries">0</p>
                     </div>
                 </div>
             </div>
@@ -75,7 +96,7 @@
                     </div>
                     <div class="ml-4">
                         <p class="text-sm text-gray-600">Storage Used</p>
-                        <p class="text-2xl font-bold text-gray-900" x-text="stats.storageUsedMB.toFixed(1) + ' MB'">0 MB</p>
+                        <p class="text-2xl font-bold text-gray-900" id="storageUsed">0 MB</p>
                     </div>
                 </div>
             </div>
@@ -88,10 +109,9 @@
                     <i class="fas fa-upload mr-2"></i>Upload Documents
                 </h2>
                 
-                <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center"
-                     @dragover.prevent @drop.prevent="handleDrop($event)">
+                <div id="dropZone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer">
                     <input type="file" id="file-upload" class="hidden" multiple 
-                           accept=".pdf,.txt,.docx,.xlsx,.csv" @change="handleFileSelect($event)">
+                           accept=".pdf,.txt,.docx,.xlsx,.csv">
                     
                     <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-4"></i>
                     <p class="text-lg text-gray-600 mb-2">Drop files here or</p>
@@ -102,20 +122,9 @@
                 </div>
 
                 <!-- Upload Progress -->
-                <div x-show="uploads.length > 0" class="mt-6">
+                <div id="uploadProgress" class="mt-6 hidden">
                     <h3 class="font-semibold mb-4">Upload Progress</h3>
-                    <template x-for="upload in uploads" :key="upload.id">
-                        <div class="bg-gray-50 rounded-lg p-4 mb-2">
-                            <div class="flex justify-between items-center mb-2">
-                                <span class="font-medium" x-text="upload.filename"></span>
-                                <span class="text-sm text-gray-500" x-text="upload.status"></span>
-                            </div>
-                            <div class="w-full bg-gray-200 rounded-full h-2">
-                                <div class="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                                     :style="`width: ${upload.progress}%`"></div>
-                            </div>
-                        </div>
-                    </template>
+                    <div id="uploadList"></div>
                 </div>
             </div>
         </div>
@@ -128,33 +137,23 @@
                 </h2>
                 
                 <div class="flex space-x-4">
-                    <input type="text" x-model="query" @keyup.enter="askQuestion()"
+                    <input type="text" id="queryInput" 
                            placeholder="Ask anything about your documents..."
                            class="flex-1 p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                    <button @click="askQuestion()" :disabled="!query.trim() || isQuerying"
-                            class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 disabled:opacity-50">
+                    <button id="askBtn" 
+                            class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600">
                         <i class="fas fa-paper-plane mr-2"></i>Ask
                     </button>
                 </div>
 
                 <!-- Query Results -->
-                <div x-show="queryResult" class="mt-6 bg-gray-50 rounded-lg p-4">
+                <div id="queryResult" class="mt-6 bg-gray-50 rounded-lg p-4 hidden">
                     <h3 class="font-semibold mb-2">Response:</h3>
-                    <p class="text-gray-700 mb-4" x-text="queryResult?.response"></p>
+                    <p id="responseText" class="text-gray-700 mb-4"></p>
                     
-                    <div x-show="queryResult?.sources?.length > 0">
+                    <div id="sourcesSection" class="hidden">
                         <h4 class="font-medium mb-2">Sources:</h4>
-                        <template x-for="source in queryResult?.sources" :key="source.document_id">
-                            <div class="bg-white rounded p-3 mb-2 border-l-4 border-blue-500">
-                                <div class="flex justify-between items-center mb-1">
-                                    <span class="font-medium" x-text="source.document_name"></span>
-                                    <span class="text-sm text-gray-500">
-                                        Relevance: <span x-text="(source.relevance_score * 100).toFixed(0)">0</span>%
-                                    </span>
-                                </div>
-                                <p class="text-sm text-gray-600" x-text="source.chunk_text"></p>
-                            </div>
-                        </template>
+                        <div id="sourcesList"></div>
                     </div>
                 </div>
             </div>
@@ -178,37 +177,8 @@
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
-                        <tbody class="bg-white divide-y divide-gray-200">
-                            <template x-for="doc in documents" :key="doc.id">
-                                <tr>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <div class="flex items-center">
-                                            <i class="fas fa-file mr-2 text-gray-400"></i>
-                                            <span x-text="doc.original_filename"></span>
-                                        </div>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap">
-                                        <span class="px-2 py-1 text-xs rounded-full"
-                                              :class="{
-                                                  'bg-green-100 text-green-800': doc.status === 'completed',
-                                                  'bg-yellow-100 text-yellow-800': doc.status === 'processing',
-                                                  'bg-gray-100 text-gray-800': doc.status === 'pending',
-                                                  'bg-red-100 text-red-800': doc.status === 'failed'
-                                              }"
-                                              x-text="doc.status"></span>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        <span x-text="formatFileSize(doc.file_size)"></span>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                        <span x-text="formatDate(doc.created_at)"></span>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                        <button @click="deleteDocument(doc.id)" 
-                                                class="text-red-600 hover:text-red-900">Delete</button>
-                                    </td>
-                                </tr>
-                            </template>
+                        <tbody id="documentsTable" class="bg-white divide-y divide-gray-200">
+                            <!-- Documents will be populated here -->
                         </tbody>
                     </table>
                 </div>
@@ -217,13 +187,12 @@
     </div>
 
     <!-- Real-time Notifications -->
-    <div x-show="notification" x-transition 
-         class="fixed top-4 right-4 bg-white rounded-lg shadow-lg border p-4 z-50 max-w-sm">
+    <div id="notification" class="fixed top-4 right-4 bg-white rounded-lg shadow-lg border p-4 z-50 max-w-sm hidden">
         <div class="flex items-center">
-            <i class="fas fa-bell text-blue-500 mr-2"></i>
+            <i id="notificationIcon" class="mr-2"></i>
             <div>
-                <p class="font-medium" x-text="notification?.title"></p>
-                <p class="text-sm text-gray-600" x-text="notification?.message"></p>
+                <p id="notificationTitle" class="font-medium"></p>
+                <p id="notificationMessage" class="text-sm text-gray-600"></p>
             </div>
         </div>
     </div>
