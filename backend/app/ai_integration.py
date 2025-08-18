@@ -92,7 +92,7 @@ class AIServiceIntegration:
                     logger.info("✅ Successfully imported document_engine via package import")
                 except ImportError:
                     # Try module import (works if ai_service is not a package)
-                    from document_engine import process_document_pipeline
+                    from document_engine import process_document_pipeline  # type: ignore
                     logger.info("✅ Successfully imported document_engine via module import")
                 
                 # Process the document
@@ -158,7 +158,7 @@ class AIServiceIntegration:
                 except ImportError:
                     try:
                         # Second try: direct module import
-                        from RAG import retriever_tool, llm
+                        from RAG import retriever_tool, llm  # type: ignore
                         logger.info("✅ Successfully imported RAG via module import")
                     except ImportError:
                         # Third try: explicit path import

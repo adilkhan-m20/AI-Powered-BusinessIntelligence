@@ -1,5 +1,5 @@
 
-# ai_service/RAG.py - Fixed RAG System for Local Execution
+# ai_service/RAG.py - Fixed RAG System for Windows
 from dotenv import load_dotenv
 import os
 import logging
@@ -9,13 +9,16 @@ from operator import add as add_messages
 from langchain_community.embeddings.huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores.faiss import FAISS
 from langchain_core.tools import tool
-from langchain_community.llms import HuggingFacePipeline  # Using local pipeline instead of Hub
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from langchain_community.llms import HuggingFacePipeline
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import torch
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Fix for Windows symlink warning
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 load_dotenv()
 
@@ -101,15 +104,15 @@ Please always cite the specific parts of the documents you use in your answers.
 
 # Local LLM setup using a smaller, local model that doesn't require API tokens
 try:
-    # Try to use a small local model
+    # Use the correct model class for T5 (sequence-to-sequence)
     model_name = "google/flan-t5-small"
     
     # Check if GPU is available
     device = 0 if torch.cuda.is_available() else -1
     
-    # Create tokenizer and model
+    # Create tokenizer and model with the correct class
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
     
     # Create pipeline
     pipe = pipeline(
