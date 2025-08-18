@@ -4,6 +4,7 @@ import os
 import sys
 import asyncio
 import logging
+import importlib.util
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
@@ -11,11 +12,26 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Define paths
 AI_SERVICE_PATH = Path(__file__).parent.parent.parent / "ai_service"
 AI_SERVICE_PATH = AI_SERVICE_PATH.resolve()
 
-if str(AI_SERVICE_PATH.parent) not in sys.path:
-    sys.path.insert(0, str(AI_SERVICE_PATH.parent))
+# Add the project root to path
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Verify paths exist
+if not AI_SERVICE_PATH.exists():
+    logger.error(f"AI service path does not exist: {AI_SERVICE_PATH}")
+    raise FileNotFoundError(f"AI service path not found: {AI_SERVICE_PATH}")
+
+# Verify critical files exist
+required_files = ["document_engine.py", "RAG.py"]
+missing_files = [f for f in required_files if not (AI_SERVICE_PATH / f).exists()]
+if missing_files:
+    logger.error(f"Missing required files in AI service directory: {missing_files}")
+    raise FileNotFoundError(f"Missing AI service files: {missing_files}")
 
 class AIServiceIntegration:
     """Integration bridge to your existing AI service"""
@@ -23,6 +39,7 @@ class AIServiceIntegration:
     def __init__(self):
         self.ai_service_url = os.getenv("AI_SERVICE_URL", "http://localhost:3000")
         self.ai_service_path = AI_SERVICE_PATH
+        logger.info(f"AI service path: {self.ai_service_path}")
         
     async def process_document_with_ai(self, document_path: str, document_id: int) -> Dict[str, Any]:
         """Process document using your existing AI service"""
@@ -40,7 +57,7 @@ class AIServiceIntegration:
             }
             
         except Exception as e:
-            logger.error(f"AI processing failed: {e}")
+            logger.exception(f"AI processing failed: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -58,20 +75,25 @@ class AIServiceIntegration:
             return result
             
         except Exception as e:
-            logger.error(f"Document processing failed: {e}")
+            logger.exception(f"Document processing failed: {e}")
             raise Exception(f"AI processing failed: {str(e)}")
     
     def _process_document_sync(self, document_path: str, document_id: int) -> Dict[str, Any]:
         """Synchronous wrapper for your existing document processing"""
         
         try:
-            # Change to ai-service directory to maintain file paths
-            original_cwd = os.getcwd()
-            os.chdir(str(self.ai_service_path))
+            # Add AI service path to sys.path temporarily
+            sys.path.insert(0, str(self.ai_service_path))
             
             try:
-                # Import document processing function
-                from document_engine import process_document_pipeline
+                # First try direct import (works if ai_service is a proper package)
+                try:
+                    from ai_service.document_engine import process_document_pipeline
+                    logger.info("✅ Successfully imported document_engine via package import")
+                except ImportError:
+                    # Try module import (works if ai_service is not a package)
+                    from document_engine import process_document_pipeline
+                    logger.info("✅ Successfully imported document_engine via module import")
                 
                 # Process the document
                 result = process_document_pipeline(document_id, document_path)
@@ -84,13 +106,15 @@ class AIServiceIntegration:
                 }
                 
             finally:
-                os.chdir(original_cwd)
+                # Remove the path from sys.path
+                if str(self.ai_service_path) in sys.path:
+                    sys.path.remove(str(self.ai_service_path))
                 
         except ImportError as e:
-            logger.error(f"Failed to import AI modules: {e}")
+            logger.exception(f"Failed to import AI modules: {e}")
             raise Exception(f"Failed to import AI modules: {str(e)}")
         except Exception as e:
-            logger.error(f"Document processing failed: {e}")
+            logger.exception(f"Document processing failed: {e}")
             raise Exception(f"Document processing failed: {str(e)}")
     
     async def query_rag_system(self, query: str, user_id: int, filters: Optional[Dict] = None) -> Dict[str, Any]:
@@ -109,7 +133,7 @@ class AIServiceIntegration:
             }
             
         except Exception as e:
-            logger.error(f"RAG query failed: {e}")
+            logger.exception(f"RAG query failed: {e}")
             return {
                 "success": False,
                 "error": str(e)
@@ -119,14 +143,44 @@ class AIServiceIntegration:
         """Synchronous wrapper for RAG query using your existing code"""
         
         try:
-            # Change to ai-service directory to access FAISS index
-            original_cwd = os.getcwd()
-            os.chdir(str(self.ai_service_path))
+            # Add AI service path to sys.path temporarily
+            sys.path.insert(0, str(self.ai_service_path))
             
             try:
-                # Import your existing RAG modules
+                # Import your existing RAG modules with proper paths
                 from langchain_core.messages import HumanMessage
-                from RAG import retriever_tool, llm
+                
+                # Import RAG with multiple fallback strategies
+                try:
+                    # First try: package-style import
+                    from ai_service.RAG import retriever_tool, llm
+                    logger.info("✅ Successfully imported RAG via package import")
+                except ImportError:
+                    try:
+                        # Second try: direct module import
+                        from RAG import retriever_tool, llm
+                        logger.info("✅ Successfully imported RAG via module import")
+                    except ImportError:
+                        # Third try: explicit path import
+                        logger.warning("⚠️ Falling back to explicit path import for RAG")
+                        rag_path = self.ai_service_path / "RAG.py"
+                        
+                        # Check if file exists
+                        if not rag_path.exists():
+                            raise FileNotFoundError(f"RAG.py not found at {rag_path}")
+                        
+                        # Load module safely
+                        spec = importlib.util.spec_from_file_location("RAG", str(rag_path))
+                        if spec is None or spec.loader is None:
+                            raise ImportError(f"Could not create module spec for RAG.py at {rag_path}")
+                        
+                        rag_module = importlib.util.module_from_spec(spec)
+                        sys.modules["RAG"] = rag_module
+                        spec.loader.exec_module(rag_module)  # This is safe now with the None check
+                        
+                        retriever_tool = rag_module.retriever_tool
+                        llm = rag_module.llm
+                        logger.info("✅ Successfully imported RAG via explicit path import")
                 
                 # Create the message for your RAG agent
                 messages = [HumanMessage(content=query)]
@@ -176,10 +230,12 @@ class AIServiceIntegration:
                 }
                 
             finally:
-                os.chdir(original_cwd)
+                # Remove the path from sys.path
+                if str(self.ai_service_path) in sys.path:
+                    sys.path.remove(str(self.ai_service_path))
             
         except Exception as e:
-            logger.error(f"RAG query failed: {e}")
+            logger.exception(f"RAG query failed: {e}")
             raise Exception(f"RAG query failed: {str(e)}")
     
     async def validate_document_quality(self, document_path: str) -> Dict[str, Any]:
@@ -248,7 +304,7 @@ class AIServiceIntegration:
             }
             
         except Exception as e:
-            logger.error(f"Document validation failed: {e}")
+            logger.exception(f"Document validation failed: {e}")
             return {
                 "is_valid": False,
                 "quality_score": 0.0,
@@ -260,7 +316,10 @@ class AIServiceIntegration:
     def _create_document_loader(self, document_path: str):
         """Create appropriate document loader based on file type"""
         try:
-            from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredExcelLoader
+            # Import with correct paths
+            from langchain_community.document_loaders.text import TextLoader
+            from langchain_community.document_loaders.pdf import PyPDFLoader
+            from langchain_community.document_loaders.excel import UnstructuredExcelLoader
             
             # Get file extension
             _, ext = os.path.splitext(document_path.lower())
@@ -277,19 +336,19 @@ class AIServiceIntegration:
                 return TextLoader(document_path, encoding='utf-8')
                 
         except Exception as e:
-            logger.error(f"Error creating document loader: {e}")
+            logger.exception(f"Error creating document loader: {e}")
             return None
     
     async def get_rag_agent_stats(self) -> Dict[str, Any]:
         """Get statistics about the RAG system"""
         try:
-            # Change to ai-service directory
-            original_cwd = os.getcwd()
-            os.chdir(str(self.ai_service_path))
+            # Add AI service path to sys.path temporarily
+            sys.path.insert(0, str(self.ai_service_path))
             
             try:
-                from langchain_community.embeddings import HuggingFaceEmbeddings
-                from langchain_community.vectorstores import FAISS
+                # Import with correct paths
+                from langchain_community.embeddings.huggingface import HuggingFaceEmbeddings
+                from langchain_community.vectorstores.faiss import FAISS
                 
                 # Load FAISS database to get stats
                 if os.path.exists("faiss_index"):
@@ -311,10 +370,12 @@ class AIServiceIntegration:
                     }
                     
             finally:
-                os.chdir(original_cwd)
+                # Remove the path from sys.path
+                if str(self.ai_service_path) in sys.path:
+                    sys.path.remove(str(self.ai_service_path))
                 
         except Exception as e:
-            logger.error(f"RAG stats retrieval failed: {e}")
+            logger.exception(f"RAG stats retrieval failed: {e}")
             return {
                 "faiss_index_exists": False,
                 "error": str(e),
