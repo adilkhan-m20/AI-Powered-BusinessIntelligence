@@ -23,6 +23,7 @@ from .services import *
 from .websocket_manager import websocket_manager, WebSocketManager
 from .task_queue import task_queue
 from .monitoring import metrics_collector
+from fastapi import WebSocket, WebSocketDisconnect
 
 # Global managers
 websocket_manager = WebSocketManager()
